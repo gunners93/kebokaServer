@@ -3,7 +3,7 @@ import { registerUser, loginUser,getMe } from '../controllers/authController.js'
 import { verifyToken } from '../middleware/authMiddleware.js';
 import { upload } from "../middleware/upload.js";
 import { createCompetition,getProcurements ,createProcurement, updateProcurement, deleteProcurement,getCompetitions,getCompetitionTypes} from '../controllers/adminController.js';
-import { getPrizeDetails,getCompetitionById,getCompetitionsWeb } from '../controllers/webController.js';
+import { getPrizeDetails,getCompetitionById,getCompetitions_web,getcompetitionstype_web } from '../controllers/webController.js';
 const router = express.Router();
 
 router.post('/signup', registerUser);
@@ -40,7 +40,7 @@ router.get('/competitions/:type', );
 router.get('/prizes/:id', getPrizeDetails);
 router.get('/competitions/:id', getCompetitionById);
 
-router.get('/competitions_web', getCompetitionsWeb);
+router.get('/competitions_web', getCompetitions_web);
 
 
 
