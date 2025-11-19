@@ -1,23 +1,26 @@
-import mysql from 'mysql2';
+import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const db = mysql.createConnection({
+const db = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  //  port: 8889,       // 👈 use your MAMP/WAMP MySQL port here
-  port: 3306,
+  port: process.env.DB_PORT || 3306,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0,
-  // socketPath: "/Applications/MAMP/tmp/mysql/mysql.sock", // ✅ adjust if needed
+  queueLimit: 0
 });
 
-db.connect((err) => {
-  if (err) throw err;
-  console.log('✅ MySQL Connected...');
-});
+// Test connection
+(async () => {
+  try {
+    const [rows] = await db.query("SELECT 1");
+    console.log("✅ MySQL Connected Successfully!");
+  } catch (err) {
+    console.error("❌ MySQL Connection Error:", err.message);
+  }
+})();
 
 export default db;
