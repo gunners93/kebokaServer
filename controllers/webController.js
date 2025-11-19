@@ -5,7 +5,7 @@ export const getPrizeDetails = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const [rows] = await db.promise().query(
+    const [rows] = await db.query(
       `SELECT c.*, ct.name AS competition_type, p.*
        FROM competitions c
        LEFT JOIN competition_types ct ON c.type_id = ct.id
@@ -19,8 +19,6 @@ export const getPrizeDetails = async (req, res) => {
     }
 
     const competition = { ...rows[0] };
-
-    // Parse images safely
     competition.images = parseJSONSafe(competition.images);
 
     res.json({
@@ -38,7 +36,7 @@ export const getCompetitionById = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const [rows] = await db.promise().query(
+    const [rows] = await db.query(
       `SELECT c.*, ct.name AS competition_type, p.*
        FROM competitions c
        LEFT JOIN competition_types ct ON c.type_id = ct.id
@@ -64,7 +62,7 @@ export const getCompetitionById = async (req, res) => {
 // ✅ Get all competitions (web) with images parsed
 export const getCompetitionsWeb = async (req, res) => {
   try {
-    const [rows] = await db.promise().query(
+    const [rows] = await db.query(
       `SELECT c.*, ct.name AS competition_type, p.*,
               c.title AS competitions_title,
               c.id AS competitions_id
@@ -90,7 +88,7 @@ export const getCompetitionsByTypeWeb = async (req, res) => {
   const { type } = req.params;
 
   try {
-    const [rows] = await db.promise().query(
+    const [rows] = await db.query(
       `SELECT c.*, ct.name AS competition_type, p.*,
               c.title AS competitions_title,
               c.id AS competitions_id
