@@ -7,16 +7,27 @@ const db = mysql.createConnection({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-   port: 8889,       // 👈 use your MAMP/WAMP MySQL port here
+  //  port: 8889,       // 👈 use your MAMP/WAMP MySQL port here
+  port: 3306,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
   // socketPath: "/Applications/MAMP/tmp/mysql/mysql.sock", // ✅ adjust if needed
 });
 
-db.connect((err) => {
-  if (err) throw err;
-  console.log('✅ MySQL Connected...');
+// db.connect((err) => {
+//   if (err) throw err;
+//   console.log('✅ MySQL Connected...');
+// });
+
+db.getConnection((err, connection) => {
+  if (err) {
+    console.error("❌ MySQL Connection Error:", err.message);
+  } else {
+    console.log("✅ Connected to cPanel MySQL Database!");
+    connection.release();
+  }
 });
+
 
 export default db;
