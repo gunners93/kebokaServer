@@ -40,7 +40,7 @@ router.get('/competitions/:type', );
 router.get('/prizes/:id', getPrizeDetails);
 router.get('/competitions/:id', getCompetitionById);
 
-router.get('/competitions_web', getCompetitions_web);
+router.get('/competitions_web', getCompetitionsWeb);
 
 
 
