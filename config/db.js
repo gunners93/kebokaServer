@@ -15,19 +15,9 @@ const db = mysql.createConnection({
   // socketPath: "/Applications/MAMP/tmp/mysql/mysql.sock", // ✅ adjust if needed
 });
 
-// db.connect((err) => {
-//   if (err) throw err;
-//   console.log('✅ MySQL Connected...');
-// });
-
-db.getConnection((err, connection) => {
-  if (err) {
-    console.error("❌ MySQL Connection Error:", err.message);
-  } else {
-    console.log("✅ Connected to cPanel MySQL Database!");
-    connection.release();
-  }
+db.connect((err) => {
+  if (err) throw err;
+  console.log('✅ MySQL Connected...');
 });
-
 
 export default db;
