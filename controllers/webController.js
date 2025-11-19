@@ -2,11 +2,10 @@ import db from "../config/db.js";
 
 // 🧠 Get full prize/competition details by ID
 export const getPrizeDetails = async (req, res) => {
- const { id } = req.params;
+  const { id } = req.params;
 
   try {
-    // Fetch the main competition details
-    const [competition] = await db.promise().query(
+    const [rows] = await db.promise().query(
       `SELECT c.*, ct.name AS competition_type, p.*
        FROM competitions c
        LEFT JOIN competition_types ct ON c.type_id = ct.id
@@ -15,38 +14,32 @@ export const getPrizeDetails = async (req, res) => {
       [id]
     );
 
-    if (!competition.length) {
+    if (!rows.length) {
       return res.status(404).json({ message: "Competition not found" });
     }
 
-    const comp = competition[0];
+    const competition = { ...rows[0] };
 
-    // Parse JSON fields (like images)
-    if (comp.images && typeof comp.images === "string") {
-      try {
-        comp.images = JSON.parse(comp.images);
-      } catch {
-        comp.images = [];
-      }
-    }
+    // Parse images safely
+    competition.images = parseJSONSafe(competition.images);
 
     res.json({
       success: true,
-      data: comp,
+      data: competition,
     });
   } catch (error) {
     console.error("Error fetching competition:", error);
     res.status(500).json({ message: "Server error" });
   }
-}
+};
 
-//get competitions by id
+// ✅ Get competition by ID
 export const getCompetitionById = async (req, res) => {
   const { id } = req.params;
 
   try {
     const [rows] = await db.promise().query(
-      `SELECT c.*, ct.name AS competition_type, p.* 
+      `SELECT c.*, ct.name AS competition_type, p.*
        FROM competitions c
        LEFT JOIN competition_types ct ON c.type_id = ct.id
        LEFT JOIN procurements p ON c.procurement_id = p.id
@@ -54,66 +47,78 @@ export const getCompetitionById = async (req, res) => {
       [id]
     );
 
-    if (rows.length === 0) {
+    if (!rows.length) {
       return res.status(404).json({ message: "Competition not found" });
     }
 
-    res.json({ data: rows[0] });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
-  }
-}
+    const competition = { ...rows[0] };
+    competition.images = parseJSONSafe(competition.images);
 
-// get competitions with image
-export const getCompetitions_web = async (req, res) => {
-  try {
-    const [rows] = await db.promise().query(
-      `SELECT c.*, ct.name AS competition_type, p.*,t.*,
-      c.title AS competitions_title ,
-      c.id as competitions_id
-       FROM competitions c
-       LEFT JOIN competition_types ct ON c.type_id = ct.id
-       LEFT JOIN procurements p ON c.procurement_id = p.id
-       LEFT JOIN competition_types t ON c.type_id = t.id
-       `
-       
-    );
-
-       const data = rows.map((item) => ({
-      ...item,
-      images: item.images ? JSON.parse(item.images) : [],
-    }));
-    res.json(data);
+    res.json({ success: true, data: competition });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
   }
 };
-//competitionstype from  competition_types where type_name =$type join competitions join procurements
-export const getcompetitionstype_web = async (req, res) => {
-  const where=req.params.type;
+
+// ✅ Get all competitions (web) with images parsed
+export const getCompetitionsWeb = async (req, res) => {
   try {
     const [rows] = await db.promise().query(
-      `SELECT c.*, ct.name AS competition_type, p.*,t.*,
-      c.title AS competitions_title ,
-      c.id as competitions_id
+      `SELECT c.*, ct.name AS competition_type, p.*,
+              c.title AS competitions_title,
+              c.id AS competitions_id
        FROM competitions c
        LEFT JOIN competition_types ct ON c.type_id = ct.id
-       LEFT JOIN procurements p ON c.procurement_id = p.id
-       LEFT JOIN competition_types t ON c.type_id = t.id
-       WHERE t.type_name = ?`,
-       [where]
+       LEFT JOIN procurements p ON c.procurement_id = p.id`
     );
-       const data = rows.map((item) => ({
+
+    const data = rows.map((item) => ({
       ...item,
-      images: item.images ? JSON.parse(item.images) : [],
+      images: parseJSONSafe(item.images),
     }));
-    res.json(data);
+
+    res.json({ success: true, data });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
-    
   }
+};
 
+// ✅ Get competitions by type (web) with images parsed
+export const getCompetitionsByTypeWeb = async (req, res) => {
+  const { type } = req.params;
+
+  try {
+    const [rows] = await db.promise().query(
+      `SELECT c.*, ct.name AS competition_type, p.*,
+              c.title AS competitions_title,
+              c.id AS competitions_id
+       FROM competitions c
+       LEFT JOIN competition_types ct ON c.type_id = ct.id
+       LEFT JOIN procurements p ON c.procurement_id = p.id
+       WHERE ct.type_name = ?`,
+      [type]
+    );
+
+    const data = rows.map((item) => ({
+      ...item,
+      images: parseJSONSafe(item.images),
+    }));
+
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ⚡ Helper function: safely parse JSON
+function parseJSONSafe(value) {
+  if (!value) return [];
+  try {
+    return JSON.parse(value);
+  } catch {
+    return [];
+  }
 }
