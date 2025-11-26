@@ -1,5 +1,5 @@
 import express from 'express';
-import { registerUser, loginUser,getMe } from '../controllers/authController.js';
+import { registerUser, loginUser,getMe,userProfileUpdate } from '../controllers/authController.js';
 import { verifyToken } from '../middleware/authMiddleware.js';
 import { upload } from "../middleware/upload.js";
 import { createCompetition,getProcurements ,createProcurement, updateProcurement, deleteProcurement,getCompetitions,getCompetitionTypes} from '../controllers/adminController.js';
@@ -9,6 +9,9 @@ const router = express.Router();
 router.post('/signup', registerUser);
 router.post('/login', loginUser);
 router.get("/me", verifyToken, getMe);
+
+router.put("/userProfileUpdate", verifyToken, userProfileUpdate);
+
 // Example protected route
 router.get('/profile', verifyToken, (req, res) => {
   res.json({ message: `Welcome ${req.user.email}`, user: req.user });

@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import db from "../config/db.js";
-
+ import { generateToken } from "../utils/generateToken.js";
 export const registerUser = async (req, res) => {
   const { name, email, password, confirmPassword } = req.body;
 
@@ -24,30 +24,64 @@ export const registerUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Insert new user
-    await db
+    const [result] = await db
       .promise()
-      .query("INSERT INTO users (name, email, password) VALUES (?, ?, ?)", [
-        name,
-        email,
-        hashedPassword,
-      ]);
+      .query(
+        "INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
+        [name, email, hashedPassword]
+      );
 
-    // Create JWT token
-    const token = jwt.sign({ email }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
-    });
+    // Optionally return created user info without token
+    const user = { id: result.insertId, name, email };
 
     res.status(201).json({
       success: true,
-      message: "Signup successful",
-      user: { name, email },
-      token,
+      message: "Registration successful. Please log in.",
+      user,
     });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server error" });
   }
 };
+// export const loginUser = async (req, res) => {
+//   const { email, password } = req.body;
+
+//   if (!email || !password)
+//     return res.status(400).json({ message: "Email and password required" });
+
+//   try {
+//     const [user] = await db
+//       .promise()
+//       .query("SELECT * FROM users WHERE email = ?", [email]);
+
+//     if (user.length === 0)
+//       return res.status(404).json({ message: "User not found" });
+
+//     const isMatch = await bcrypt.compare(password, user[0].password);
+
+//     if (!isMatch)
+//       return res.status(401).json({ message: "Invalid credentials" });
+
+//     const token = jwt.sign({ id: user[0].id }, process.env.JWT_SECRET, {
+//       expiresIn: "7d",
+//     });
+
+//     res.status(200).json({
+//       success: true,
+//       message: "Login successful",
+//       user: {
+//         id: user[0].id,
+//         name: user[0].name,
+//         email: user[0].email,
+//       },
+//       token,
+//     });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ message: "Server error" });
+//   }
+// };
 
 export const loginUser = async (req, res) => {
   const { email, password } = req.body;
@@ -56,30 +90,37 @@ export const loginUser = async (req, res) => {
     return res.status(400).json({ message: "Email and password required" });
 
   try {
-    const [user] = await db
+    const [rows] = await db
       .promise()
       .query("SELECT * FROM users WHERE email = ?", [email]);
 
-    if (user.length === 0)
+    if (rows.length === 0)
       return res.status(404).json({ message: "User not found" });
 
-    const isMatch = await bcrypt.compare(password, user[0].password);
+    const user = rows[0];
 
+    const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch)
       return res.status(401).json({ message: "Invalid credentials" });
 
-    const token = jwt.sign({ id: user[0].id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
-    });
+    // const token = jwt.sign({ id: user.Id,
+    //   name: user.name,
+    //   email: user.email, }, process.env.JWT_SECRET, {
+    //   expiresIn: "7d",
+    // });
+
+  //   console.log("Generated user.id,:", user.Id,);
+
+  //   console.log("Generated Token:", user);
+  //  return;
+     const token = generateToken(user);
+
+    const { password: _, ...safeUser } = user; // remove password
 
     res.status(200).json({
       success: true,
       message: "Login successful",
-      user: {
-        id: user[0].id,
-        name: user[0].name,
-        email: user[0].email,
-      },
+      user: safeUser,
       token,
     });
   } catch (error) {
@@ -88,13 +129,75 @@ export const loginUser = async (req, res) => {
   }
 };
 
-
 export const getMe = async (req, res) => {
   try {
     // user is already attached to req by protect middleware
     res.json({
       success: true,
       user: req.user,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+export const userProfileUpdate = async (req, res) => {
+   const userId = req.user.id;
+ 
+  if (!userId) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+
+  const {
+    name,
+    email,
+    phone,
+    state,
+    lga,
+    city,
+    isStudent,
+    occupation,
+    schoolName,
+    department,
+  } = req.body;
+
+  try {
+    // Update user
+    await db.promise().query(
+      `UPDATE users SET phone = ?, state = ?, lga = ?, city = ?, isStudent = ?, occupation = ?, schoolName = ?, department = ? WHERE id = ?`,
+      [
+        phone,
+        state,
+        lga,
+        city,
+        isStudent,
+        occupation,
+        schoolName,
+        department,
+        userId,
+      ]
+    );
+
+    // Get updated user
+    // const [rows] = await db.promise().query(
+    //   `SELECT id, name, email, phone, state, lga, city, isStudent, occupation, schoolName, department 
+    //    FROM users WHERE id = ?`,
+    //   [userId]
+    // );
+
+      const query = "SELECT * FROM users WHERE id = ?";
+    const [rows] = await db.promise().query(query, [userId]);
+    //show query result in console
+   // console.log(query);
+
+    const updatedUser = rows[0];
+    // console.log("Updated user data:", updatedUser);
+
+    res.json({
+      success: true,
+      message: "Profile updated successfully",
+      user: updatedUser,
     });
   } catch (err) {
     console.error(err);

@@ -7,8 +7,8 @@ const db = mysql.createConnection({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-   //port: 8889,       // 👈 use your MAMP/WAMP MySQL port here
-     port: 3306,
+  // port: 8889,       // 👈 use your MAMP/WAMP MySQL port here
+      port: 3306,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
