@@ -9,7 +9,7 @@ dotenv.config();
 const app = express();
 
 app.use(cors({
-    origin: 'https://keboka.com', // <--- SPECIFICALLY ALLOW YOUR FRONTEND DOMAIN
+    origin: '*', // <--- SPECIFICALLY ALLOW YOUR FRONTEND DOMAIN
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true, // Allow cookies/authentication headers
 }));
