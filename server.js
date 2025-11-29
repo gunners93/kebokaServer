@@ -8,7 +8,11 @@ import path from "path";
 dotenv.config();
 const app = express();
 
-app.use(cors());
+app.use(cors({
+    origin: 'https://keboka.com', // <--- SPECIFICALLY ALLOW YOUR FRONTEND DOMAIN
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true, // Allow cookies/authentication headers
+}));
 app.use(express.json());
 app.use("/api/uploads", express.static(path.join(process.cwd(), "uploads")));
 app.use('/api/auth', authRoutes);
