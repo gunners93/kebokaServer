@@ -9,9 +9,9 @@ dotenv.config();
 const app = express();
 
 app.use(cors({
-    origin: 'https://keboka.com', // <--- SPECIFICALLY ALLOW YOUR FRONTEND DOMAIN
+    origin: 'https://keboka.com', 
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true, // Allow cookies/authentication headers
+    credentials: true, 
 }));
 app.use(express.json());
 app.use("/api/uploads", express.static(path.join(process.cwd(), "uploads")));
