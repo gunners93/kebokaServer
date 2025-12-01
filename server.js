@@ -11,7 +11,9 @@ const app = express();
 app.use(cors({
     origin: '*', 
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true, 
+     allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+      optionsSuccessStatus: 200,
 }));
 app.use(express.json());
 app.use("/api/uploads", express.static(path.join(process.cwd(), "uploads")));
