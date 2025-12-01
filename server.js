@@ -11,12 +11,9 @@ const app = express();
 
 // Define allowed origins for secure CORS configuration
 const allowedOrigins = [
-    'https://keboka.com',
-    'http://localhost:5174',
-    'https://www.keboka.com',
-    'http://keboka.com',
-    '*'
-    // Critical for local testing
+  'https://keboka.com',
+  'https://www.keboka.com',
+  'http://localhost:5174'
 ];
 
 app.use(cors({
