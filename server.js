@@ -51,7 +51,7 @@ app.use("/api/uploads", express.static(path.join(process.cwd(), "uploads")));
 // Routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1', webRoutes);
-
+app.use('/api/v2', authRoutes);
 // Simple root check
 app.get('/', (req, res) => {
     res.send('Keboka API is running!');
