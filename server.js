@@ -1,7 +1,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-// CRITICAL: We need the database instance to call .authenticate()
+// We need to import db to ensure the connection process in db.js runs
 import db from './config/db.js'; 
 import authRoutes from './routes/authRoutes.js';
 import webRoutes from './routes/webRoutes.js';
@@ -51,28 +51,11 @@ app.get('/', (req, res) => {
 
 
 // ----------------------------------------------------
-// CRITICAL FIX: Server starts ONLY after DB authentication is confirmed.
+// CRITICAL FIX: Removed Sequelize-specific authentication code.
+// The server now starts immediately, relying on the asynchronous 
+// mysql2 connection setup in ./config/db.js.
 // ----------------------------------------------------
-async function startServer() {
-    try {
-        // 1. Authenticate the database connection
-        // FIX: The imported 'db' object likely contains the instance under 
-        // the 'sequelize' property, not directly on 'db'.
-        await db.sequelize.authenticate(); 
-        
-        console.log('Database connection has been established successfully.');
-
-        // 2. Start the Express server only upon success
-        app.listen(PORT, () => {
-            console.log(`✅ Server is running successfully on port ${PORT}`);
-            console.log(`Public URL: https://api.keboka.com (proxied)`);
-        });
-
-    } catch (error) {
-        console.error('❌ Server startup failed due to database error:', error);
-        // Exiting the process will allow PM2 to attempt a clean restart
-        process.exit(1); 
-    }
-}
-
-startServer();
+app.listen(PORT, () => {
+    console.log(`✅ Server is running successfully on port ${PORT}`);
+    console.log(`Public URL: https://api.keboka.com (proxied)`);
+});
