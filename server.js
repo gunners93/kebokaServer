@@ -15,8 +15,16 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use("/api/uploads", express.static(path.join(process.cwd(), "uploads")));
-app.use('/api/v1', authRoutes);
-app.use('/api/web', webRoutes);
+
+// --- CRITICAL FIXES BELOW ---
+// 1. Map /api/auth to the dedicated Auth router
+app.use('/api/auth', authRoutes); 
+
+// 2. Map /api/v1 (containing competitions, types, etc.) to the Web router
+app.use('/api/v1', webRoutes); 
+
+// Removed the redundant/confusing app.use('/api/web', webRoutes); entry
+// --- CRITICAL FIXES ABOVE ---
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
