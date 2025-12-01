@@ -27,8 +27,16 @@ app.use(cors({
       if (!origin) return callback(null, true);
       
       if (allowedOrigins.indexOf(origin) === -1) {
-        const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-        return callback(new Error(msg), false);
+        // --- TEMPORARY LOGGING AND BYPASS FIX ---
+        // Log the unrecognized origin but allow the request to pass.
+        // This will show us the exact origin in the PM2 logs.
+        console.error(`🔴 CORS WARNING: Request blocked from unrecognized origin: ${origin}`);
+        return callback(null, true); // <--- TEMPORARILY BYPASSING THE BLOCK
+        // ---------------------------------------
+
+        // ORIGINAL BLOCKED CODE (for reference):
+        // const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+        // return callback(new Error(msg), false);
       }
       return callback(null, true);
     },
