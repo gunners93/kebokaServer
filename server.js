@@ -14,6 +14,10 @@ const PORT = process.env.PORT || 5000;
 // Define allowed origins for secure CORS configuration
 const allowedOrigins = [
     'https://keboka.com',
+    // Added common variations and the non-secure version of the main domain
+    'http://keboka.com', 
+    'https://www.keboka.com', 
+    'http://www.keboka.com',
     'http://localhost:5174'
 ];
 
