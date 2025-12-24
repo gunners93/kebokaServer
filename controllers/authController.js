@@ -33,12 +33,13 @@ export const registerUser = async (req, res) => {
 
     // Optionally return created user info without token
     const user = { id: result.insertId, name, email };
-
+ await sendWelcomeEmail(email, name);
     res.status(201).json({
       success: true,
       message: "Registration successful. Please log in.",
       user,
     });
+
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server error" });
