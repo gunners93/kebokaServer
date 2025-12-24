@@ -53,7 +53,7 @@ export const sendForgotPasswordEmail = async (email) => {
       [resetToken, resetExpires, user.Id]
     );
 
-    const resetUrl = `http://localhost:5173/reset-password/${resetToken}`;
+    const resetUrl = `http://keboka.com/reset-password/${resetToken}`;
 
     // Send email
     await transporter.sendMail({
