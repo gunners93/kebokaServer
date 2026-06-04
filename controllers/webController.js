@@ -6,7 +6,7 @@ export const getPrizeDetails = async (req, res) => {
 
   try {
     // Fetch the main competition details
-    const [competition] = await db.promise().query(
+    const [competition] = await db.query(
       `SELECT c.*, ct.name AS competition_type, p.*
        FROM competitions c
        LEFT JOIN competition_types ct ON c.type_id = ct.id
@@ -45,7 +45,7 @@ export const getCompetitionById = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const [rows] = await db.promise().query(
+    const [rows] = await db.query(
       `SELECT c.*, ct.name AS competition_type, p.* 
        FROM competitions c
        LEFT JOIN competition_types ct ON c.type_id = ct.id
@@ -68,7 +68,7 @@ export const getCompetitionById = async (req, res) => {
 // get competitions with image
 export const getCompetitions_web = async (req, res) => {
   try {
-    const [rows] = await db.promise().query(
+    const [rows] = await db.query(
       `SELECT c.*, ct.name AS competition_type, p.*,t.*,
       c.title AS competitions_title ,
       c.id as competitions_id
@@ -94,7 +94,7 @@ export const getCompetitions_web = async (req, res) => {
 export const getcompetitionstype_web = async (req, res) => {
   const where=req.params.type;
   try {
-    const [rows] = await db.promise().query(
+    const [rows] = await db.query(
       `SELECT c.*, ct.name AS competition_type, p.*,t.*,
       c.title AS competitions_title ,
       c.id as competitions_id
@@ -117,3 +117,152 @@ export const getcompetitionstype_web = async (req, res) => {
   }
 
 }
+
+
+export const getStates = async (req, res) => {
+  try {
+    const [rows] = await db.query("SELECT id, name FROM states ORDER BY name ASC");
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching states" });
+  }
+};
+
+export const getLgasByState = async (req, res) => {
+  const { stateId } = req.params;
+  try {
+    const [rows] = await db.query("SELECT id, name FROM lgas WHERE state_id = ? ORDER BY name ASC", [stateId]);
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching LGAs" });
+  }
+};
+
+export const getSchools = async (req, res) => {
+  try {
+    const [rows] = await db.query("SELECT id, school_name, state, has_campus FROM schools ORDER BY school_name ASC");
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching schools" });
+  }
+};
+export const getMyTickets = async (req, res) => {
+  try {
+    const userId = req.user.id; // Extracted from verifyToken middleware
+
+    const [rows] = await db.query(`
+      SELECT 
+        ut.id, 
+        ut.ticket_number, 
+        ut.price, 
+        ut.created_at, 
+        c.title AS competition_name,
+        p.images AS competition_image,
+        p.title  AS ptitle,
+        c.winner_id,
+        c.winning_ticket_number,
+        c.end_date
+      FROM user_tickets ut
+      JOIN competitions c ON ut.competition_id = c.id
+      JOIN procurements p ON c.procurement_id = p.id
+      WHERE ut.user_id = ?
+      ORDER BY ut.created_at DESC
+    `, [userId]);
+
+    res.status(200).json({
+      success: true,
+      count: rows.length,
+      data: rows
+    });
+  } catch (err) {
+    console.error("Fetch Tickets Error:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to retrieve your tickets", 
+      error: err.message 
+    });
+  }
+};
+export const updateBankDetails = async (req, res) => {
+  let { account_number, bank_name } = req.body;
+  const userId = req.user.id;
+
+  // 🔧 Clean inputs
+  account_number = account_number?.trim();
+  bank_name = bank_name?.trim();
+
+  // ❌ Validation
+  if (!account_number || !bank_name) {
+    return res.status(400).json({
+      success: false,
+      message: "Please provide both account number and bank name"
+    });
+  }
+
+  // ✅ Ensure numeric only
+  if (!/^\d{10}$/.test(account_number)) {
+    return res.status(400).json({
+      success: false,
+      message: "Account number must be exactly 10 digits"
+    });
+  }
+
+  // ✅ Optional: bank name length check
+  if (bank_name.length < 3) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid bank name"
+    });
+  }
+
+  try {
+    // 🔍 Check if user exists first
+    const [userRows] = await db.query(
+      `SELECT id, account_number, bank_name FROM users WHERE id = ?`,
+      [userId]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    const existingUser = userRows[0];
+
+    // ⚠️ Prevent unnecessary update
+    if (
+      existingUser.account_number === account_number &&
+      existingUser.bank_name === bank_name
+    ) {
+      return res.status(200).json({
+        success: true,
+        message: "No changes detected"
+      });
+    }
+
+    // ✅ Update
+    await db.query(
+      `UPDATE users 
+       SET account_number = ?, bank_name = ? 
+       WHERE id = ?`,
+      [account_number, bank_name, userId]
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Bank details updated successfully",
+      data: { account_number, bank_name }
+    });
+
+  } catch (err) {
+    console.error("Update Bank Error:", err);
+
+    res.status(500).json({
+      success: false,
+      message: "Server error during bank update",
+      error: err.message
+    });
+  }
+};

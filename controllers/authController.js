@@ -14,7 +14,7 @@ export const registerUser = async (req, res) => {
   try {
     // Check if user already exists
     const [existingUser] = await db
-      .promise()
+      
       .query("SELECT * FROM users WHERE email = ?", [email]);
 
     if (existingUser.length > 0)
@@ -25,7 +25,7 @@ export const registerUser = async (req, res) => {
 
     // Insert new user
     const [result] = await db
-      .promise()
+      
       .query(
         "INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
         [name, email, hashedPassword]
@@ -53,7 +53,7 @@ export const registerUser = async (req, res) => {
 
 //   try {
 //     const [user] = await db
-//       .promise()
+//       
 //       .query("SELECT * FROM users WHERE email = ?", [email]);
 
 //     if (user.length === 0)
@@ -92,7 +92,7 @@ export const loginUser = async (req, res) => {
 
   try {
     const [rows] = await db
-      .promise()
+      
       .query("SELECT * FROM users WHERE email = ?", [email]);
 
     if (rows.length === 0)
@@ -165,7 +165,7 @@ export const userProfileUpdate = async (req, res) => {
 
   try {
     // Update user
-    await db.promise().query(
+    await db.query(
       `UPDATE users SET phone = ?, state = ?, lga = ?, city = ?, isStudent = ?, occupation = ?, schoolName = ?, department = ? WHERE id = ?`,
       [
         phone,
@@ -181,14 +181,14 @@ export const userProfileUpdate = async (req, res) => {
     );
 
     // Get updated user
-    // const [rows] = await db.promise().query(
+    // const [rows] = await db.query(
     //   `SELECT id, name, email, phone, state, lga, city, isStudent, occupation, schoolName, department 
     //    FROM users WHERE id = ?`,
     //   [userId]
     // );
 
       const query = "SELECT * FROM users WHERE id = ?";
-    const [rows] = await db.promise().query(query, [userId]);
+    const [rows] = await db.query(query, [userId]);
     //show query result in console
    // console.log(query);
 
@@ -203,5 +203,48 @@ export const userProfileUpdate = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const uploadKyc = async (req, res) => {
+  try {
+    const userId = req.user.id; 
+    const { idType, idNumber } = req.body;
+    const files = req.files;
+
+    if (!files.frontImage || !files.backImage || !files.proofOfAddress) {
+      return res.status(400).json({ message: 'All documents are required.' });
+    }
+
+    // Prepare file paths for DB
+    const frontPath = files.frontImage[0].path;
+    const backPath = files.backImage[0].path;
+    const addressPath = files.proofOfAddress[0].path;
+
+    const sql = `
+      UPDATE users 
+      SET 
+        kyc_status = 'pending',
+        kyc_id_type = ?,
+        kyc_id_number = ?,
+        kyc_front_image = ?,
+        kyc_back_image = ?,
+        kyc_proof_address = ?,
+        kyc_submitted_at = NOW()
+      WHERE id = ?
+    `;
+
+    // Execute query (assuming 'db' is your mysql connection pool)
+    console.log(sql);
+ await db.query(sql, [idType, idNumber, frontPath, backPath, addressPath, userId]);
+
+    res.status(200).json({ 
+      message: 'KYC submitted successfully!',
+      status: 'pending' 
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Database update failed.' });
   }
 };
