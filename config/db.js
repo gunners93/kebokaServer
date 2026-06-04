@@ -8,11 +8,11 @@ const pool = mysql.createPool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  port: 8889,
+  // port: 8889,
   waitForConnections: true,
   connectionLimit: 10, // Allows up to 10 concurrent database operations
   queueLimit: 0,
-  socketPath: "/Applications/MAMP/tmp/mysql/mysql.sock",
+  // socketPath: "/Applications/MAMP/tmp/mysql/mysql.sock",
 });
 
 // Export the promise-based version so you can use 'await'
