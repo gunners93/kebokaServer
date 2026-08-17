@@ -1,13 +1,15 @@
-import { ExternalLinkIcon } from "lucide-react";
+// controllers/tickets.js
+// ❌ REMOVE THIS LINE - it's for frontend only
+// import { ExternalLinkIcon } from "lucide-react";
+
 import db from "../config/db.js";
+
 export const purchaseTickets = async (req, res) => {
   let connection;
-      connection = await db.getConnection();
+  connection = await db.getConnection();
 
   try {
-
     const userId = req.user.id;
-    // Note: ensure your frontend sends 'tickets', not 'cartItems'
     const { reference, amount, tickets } = req.body;
 
     if (!tickets || tickets.length === 0) {
@@ -28,7 +30,7 @@ export const purchaseTickets = async (req, res) => {
 
     // 2️⃣ Process each competition purchase
     for (const item of tickets) {
-      const { ticket_id, quantity, price,type } = item; // Use ticket_id to match your frontend
+      const { ticket_id, quantity, price, type } = item;
 
       // 🔒 Lock competition row to prevent overselling
       const [rows] = await connection.query(
@@ -48,18 +50,16 @@ export const purchaseTickets = async (req, res) => {
       // 🎟️ Prepare ticket data for batch insert
       const ticketRows = [];
       let currentSold = competition.tickets_sold;
-const cleanType = (type || "Ticket").replace(/\s+/g, '');
+      const cleanType = (type || "Ticket").replace(/\s+/g, '');
+      
       for (let i = 1; i <= quantity; i++) {
-const nextNumber = currentSold + i;
-       const ticketNumber = `KBK-${cleanType}-${String(nextNumber).padStart(6, '0')}`;
-        
-        // Match your DB columns: user_id, competition_id, ticket_number, price, order_id
+        const nextNumber = currentSold + i;
+        const ticketNumber = `KBK-${cleanType}-${String(nextNumber).padStart(6, '0')}`;
         ticketRows.push([userId, ticket_id, ticketNumber, price, orderId]);
-        
         allGeneratedTickets.push({ ticket_id, ticketNumber });
       }
 
-      // ⚡ Batch Insert (The [ticketRows] wrapper is mandatory for mysql2)
+      // ⚡ Batch Insert
       await connection.query(
         `INSERT INTO user_tickets 
          (user_id, competition_id, ticket_number, price, order_id)
@@ -74,10 +74,7 @@ const nextNumber = currentSold + i;
       );
     }
 
-   await connection.commit();
-
-    // 3️⃣ Optional: Send confirmation email here
-    // await sendTicketEmail(req.user.email, allGeneratedTickets);
+    await connection.commit();
 
     res.json({
       success: true,
@@ -86,10 +83,10 @@ const nextNumber = currentSold + i;
     });
 
   } catch (err) {
-   if (connection) await connection.rollback();
+    if (connection) await connection.rollback();
     console.error("Purchase Error:", err);
     res.status(500).json({ success: false, message: err.message });
   } finally {
-   if (connection) connection.release();
+    if (connection) connection.release();
   }
 };
