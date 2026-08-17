@@ -1,3 +1,4 @@
+//serv
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
@@ -52,7 +53,20 @@ app.use('/api/pay', paymentRoutes);
 // Simple root check
 app.get('/', (req, res) => {
     res.send('Keboka API is running!');
+
+  
 });
+
+
+// router.get("/providers", async (req, res) => {
+
+//     const result = await gbipaymentsService.getPaymentProviders();
+
+//     console.log(JSON.stringify(result, null, 2));
+
+//     res.json(result);
+
+// });
 
 
 

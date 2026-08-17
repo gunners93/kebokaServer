@@ -146,36 +146,107 @@ export const getSchools = async (req, res) => {
     res.status(500).json({ message: "Error fetching schools" });
   }
 };
+// controllers/webController.js
+
+// controllers/webController.js
+
 export const getMyTickets = async (req, res) => {
+  console.log("🎟️ Fetching tickets for user:", req.user.id);
   try {
     const userId = req.user.id; // Extracted from verifyToken middleware
 
+    console.log(`🎫 Fetching tickets for user: ${userId}`);
+
+    // Query to get user's tickets with competition and procurement details
     const [rows] = await db.query(`
       SELECT 
-        ut.id, 
-        ut.ticket_number, 
-        ut.price, 
-        ut.created_at, 
-        c.title AS competition_name,
-        p.images AS competition_image,
-        p.title  AS ptitle,
+        t.id, 
+        t.ticket_number, 
+        t.status,
+        t.created_at,
+        c.id AS competition_id,
+        c.title AS competition_title,
+        c.type_id,
+        c.description AS competition_description,
+        c.start_date,
+        c.end_date,
+        c.entry_fee,
+        c.total_participants,
         c.winner_id,
         c.winning_ticket_number,
-        c.end_date
-      FROM user_tickets ut
-      JOIN competitions c ON ut.competition_id = c.id
-      JOIN procurements p ON c.procurement_id = p.id
-      WHERE ut.user_id = ?
-      ORDER BY ut.created_at DESC
+        c.images AS competition_images,
+        ct.name AS competition_type_name,
+        ct.type_name AS competition_type,
+        ct.img AS competition_type_image,
+        ct.bgcolor AS competition_type_color,
+        p.id AS procurement_id,
+        p.title AS procurement_title,
+        p.description AS procurement_description,
+        p.brand,
+        p.model,
+        p.year,
+        p.location,
+        p.price AS procurement_price,
+        p.images AS procurement_images
+      FROM tickets t
+      JOIN competitions c ON t.competition_id = c.id
+      LEFT JOIN competition_types ct ON c.type_id = ct.id
+      LEFT JOIN procurements p ON c.procurement_id = p.id
+      WHERE t.user_id = ?
+      ORDER BY t.created_at DESC
     `, [userId]);
 
+    // Format the response data
+    const formattedTickets = rows.map(ticket => ({
+      id: ticket.id,
+      ticket_number: ticket.ticket_number,
+      status: ticket.status || 'active',
+      created_at: ticket.created_at,
+      competition: {
+        id: ticket.competition_id,
+        title: ticket.competition_title,
+        description: ticket.competition_description,
+        type: {
+          id: ticket.type_id,
+          name: ticket.competition_type_name,
+          type_name: ticket.competition_type,
+          image: ticket.competition_type_image,
+          color: ticket.competition_type_color,
+        },
+        start_date: ticket.start_date,
+        end_date: ticket.end_date,
+        entry_fee: ticket.entry_fee,
+        total_participants: ticket.total_participants,
+        images: ticket.competition_images ? JSON.parse(ticket.competition_images) : [],
+        winner_id: ticket.winner_id,
+        winning_ticket_number: ticket.winning_ticket_number,
+      },
+      procurement: ticket.procurement_id ? {
+        id: ticket.procurement_id,
+        title: ticket.procurement_title,
+        description: ticket.procurement_description,
+        brand: ticket.brand,
+        model: ticket.model,
+        year: ticket.year,
+        location: ticket.location,
+        price: ticket.procurement_price,
+        images: ticket.procurement_images ? JSON.parse(ticket.procurement_images) : [],
+      } : null,
+      // Check if this ticket is a winner
+      is_winner: ticket.winner_id && ticket.winning_ticket_number === ticket.ticket_number,
+    }));
+
+    console.log(`✅ Found ${formattedTickets.length} tickets for user ${userId}`);
+
     res.status(200).json({
+      message: "Tickets retrieved successfully",
       success: true,
-      count: rows.length,
-      data: rows
+      count: formattedTickets.length,
+      data: formattedTickets,
     });
+
   } catch (err) {
-    console.error("Fetch Tickets Error:", err);
+    console.error("❌ Fetch Tickets Error:", err);
     res.status(500).json({ 
       success: false, 
       message: "Failed to retrieve your tickets", 
