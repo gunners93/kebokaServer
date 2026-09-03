@@ -1,10 +1,9 @@
-// config/db.js
 import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Create connection pool instead of single connection
+// Create connection pool using host and port (TCP)
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
@@ -14,8 +13,7 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  // Remove socketPath if not using MAMP
-  // socketPath: "/Applications/MAMP/tmp/mysql/mysql.sock",
+  // socketPath has been removed to allow standard TCP connection
 });
 
 // Test the connection

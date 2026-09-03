@@ -5,6 +5,7 @@ import cors from 'cors';
 import authRoutes from './routes/authRoutes.js';
 import webRoutes from './routes/webRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
 import path from "path";
 
 dotenv.config();
@@ -64,7 +65,7 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1', webRoutes);
 app.use('/api/v2', authRoutes);
 app.use('/api/pay', paymentRoutes);
-
+app.use('/api/admin', adminRoutes);
 // Simple root check
 app.get('/', (req, res) => {
   res.send('Keboka API is running!');
