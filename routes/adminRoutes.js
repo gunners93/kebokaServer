@@ -31,8 +31,15 @@ router.post('/orders/create-tickets', adminController.adminCreateTickets);
 // ============================================
 // TICKETS MANAGEMENT
 // ============================================
+
+
 router.get('/tickets', adminController.getAllTickets);
+router.get('/tickets/stats', adminController.getTicketStats);
+router.get('/tickets/export', adminController.exportTickets);
+router.get('/tickets/:id', adminController.getTicketById);
 router.put('/tickets/:id/status', adminController.updateTicketStatus);
+router.put('/tickets/bulk/status', adminController.bulkUpdateTicketStatus);
+router.delete('/tickets/:id', adminController.deleteTicket);
 
 // ============================================
 // WINNERS MANAGEMENT
@@ -65,8 +72,17 @@ router.delete('/schedule/:id', adminController.deleteCompetition);
 // ============================================
 // USERS (Settings)
 // ============================================
+// routes/adminRoutes.js — Add to Users section
 router.get('/users', adminController.getAllUsers);
+router.get('/users/stats', adminController.getUserStats);
+router.get('/users/export', adminController.exportUsers);
+router.get('/users/:id', adminController.getUserById);
+router.put('/users/:id', adminController.updateUser);
 router.put('/users/:id/role', adminController.updateUserRole);
+router.delete('/users/:id', adminController.deleteUser);
+
+
+
 
 // ============================================
 // PROCUREMENTS (if needed for admin)

@@ -6,6 +6,8 @@ import { createCompetition,getProcurements ,createProcurement, updateProcurement
 import { getPrizeDetails,getCompetitionById,getCompetitions_web,getcompetitionstype_web,getMyTickets,updateBankDetails} from '../controllers/webController.js';
 import {sendForgotPasswordEmail,resetPassword} from '../controllers/emailUtility.js';
 import {purchaseTickets} from '../controllers/tickets.js';
+//procurements 
+
 const router = express.Router();
 import { uploadKyc } from '../controllers/authController.js'; 
 router.post('/signup', registerUser);
@@ -91,6 +93,9 @@ router.post('/upload-kyc',
 router.get('/my-tickets', verifyToken, getMyTickets);
 router.put('/update-bank', verifyToken, updateBankDetails);
 router.get('/competitions/:id/full-details',verifyToken,getCompetitionFullDetails);
+
+
+
 
 
 export default router;
