@@ -64,56 +64,122 @@ export const getCompetitionTypes = async (req, res) => {
 // ============================================
 
 // Get all competitions
+
+// controllers/competitionController.js (or wherever your admin getCompetitions is)
 export const getCompetitions = async (req, res) => {
   try {
+    // 1. Get all competitions with type + tickets_sold + winners_count
     const [rows] = await db.query(`
       SELECT 
         c.*,
+        c.title AS competitions_title,
+        c.id AS competition_id,
         ct.id AS type_id,
         ct.name AS competition_type_name,
         ct.type_name AS competition_type,
         ct.bgcolor AS competition_color,
         ct.img AS competition_type_image,
         ct.tag AS competition_tag,
-        p.id AS procurement_id,
-        p.title AS procurement_title,
-        p.brand AS procurement_brand,
-        p.model AS procurement_model,
-        p.year AS procurement_year,
-        p.location AS procurement_location,
-        p.value AS procurement_value,
-        p.available_quantity AS procurement_available,
-        p.images AS procurement_images,
-        p.category_id AS procurement_category_id,
-        pc.name AS procurement_category_name,
-        pc.slug AS procurement_category_slug,
-        ps.name AS procurement_subcategory_name,
-        ps.slug AS procurement_subcategory_slug,
         (SELECT COUNT(*) FROM tickets t WHERE t.competition_id = c.id) AS tickets_sold,
         (SELECT COUNT(*) FROM winners w WHERE w.competition_id = c.id) AS winners_count
       FROM competitions c
       LEFT JOIN competition_types ct ON c.type_id = ct.id
-      LEFT JOIN procurements p ON c.procurement_id = p.id
-      LEFT JOIN procurement_categories pc ON p.category_id = pc.id
-      LEFT JOIN procurement_subcategories ps ON p.subcategory_id = ps.id
       ORDER BY c.id DESC
     `);
 
-    const data = rows.map(c => ({
-      ...c,
-      images: safeParseJSON(c.images, []),
-      procurement_images: safeParseJSON(c.procurement_images, []),
-      competitions_title: c.title,
-      competition_id: c.id,
-    }));
+    if (rows.length === 0) return res.json([]);
+
+    // 2. Get ALL prizes for these competitions in one query
+    const compIds = rows.map((r) => r.id);
+    const [prizes] = await db.query(`
+      SELECT 
+        cp.competition_id,
+        cp.procurement_id,
+        cp.quantity,
+        p.id,
+        p.title,
+        p.brand,
+        p.model,
+        p.year,
+        p.location,
+        p.value,
+        p.market_value,
+        p.images,
+        pc.name AS category_name,
+        pc.slug AS category_slug,
+        ps.name AS subcategory_name,
+        ps.slug AS subcategory_slug
+      FROM competition_prizes cp
+      JOIN procurements p ON cp.procurement_id = p.id
+      LEFT JOIN procurement_categories pc ON p.category_id = pc.id
+      LEFT JOIN procurement_subcategories ps ON p.subcategory_id = ps.id
+      WHERE cp.competition_id IN (?)
+      ORDER BY cp.id ASC
+    `, [compIds]);
+
+    // Safe JSON parse
+    const safeParse = (val, fallback = []) => {
+      if (!val) return fallback;
+      if (Array.isArray(val)) return val;
+      if (typeof val === 'object') return fallback;
+      try {
+        const parsed = JSON.parse(val);
+        return Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        return [val];
+      }
+    };
+
+    // 3. Group prizes by competition
+    const prizeMap = {};
+    prizes.forEach((p) => {
+      if (!prizeMap[p.competition_id]) prizeMap[p.competition_id] = [];
+      prizeMap[p.competition_id].push({
+        procurement_id: p.procurement_id,
+        quantity: p.quantity,
+        title: p.title,
+        brand: p.brand,
+        model: p.model,
+        year: p.year,
+        location: p.location,
+        value: p.value,
+        market_value: p.market_value,
+        images: safeParse(p.images, []),
+        category_name: p.category_name,
+        category_slug: p.category_slug,
+        subcategory_name: p.subcategory_name,
+        subcategory_slug: p.subcategory_slug,
+      });
+    });
+
+    // 4. Attach prizes + legacy fallback fields
+    const data = rows.map((c) => {
+      const compPrizes = prizeMap[c.id] || [];
+      const firstPrize = compPrizes[0] || null;
+
+      return {
+        ...c,
+        images: safeParse(c.images, []),
+        prizes: compPrizes,
+        prize_count: compPrizes.length,
+
+        // ✅ Legacy / backward-compatible fields (used by List page)
+        procurement_id: firstPrize?.procurement_id || null,
+        procurement_title: firstPrize?.title || null,
+        procurement_brand: firstPrize?.brand || null,
+        procurement_model: firstPrize?.model || null,
+        procurement_value: firstPrize?.value || null,
+        procurement_images: firstPrize?.images || [],
+        procurement_category_name: firstPrize?.category_name || null,
+      };
+    });
 
     res.json(data);
   } catch (err) {
-    console.error('Get Competitions Error:', err);
+    console.error('❌ Get Competitions Error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 };
-
 // Get single competition
 export const getCompetition = async (req, res) => {
   try {
@@ -155,209 +221,324 @@ export const getCompetition = async (req, res) => {
 
 // Create competition
 export const createCompetition = async (req, res) => {
-  try {
-    console.log('📥 Create Competition Body:', req.body);
+  const connection = await db.getConnection();
 
+  try {
+    await connection.beginTransaction();
+
+    const {
+      title, type_id, prizes,        // ✅ prizes = [{ procurement_id, quantity }]
+      description, start_date, end_date,
+      entry_fee, total_participants, total_winners = 1, status = 'Active',
+    } = req.body;
+
+    // Normalize prizes
+    let prizeList = [];
+    if (typeof prizes === 'string') {
+      try { prizeList = JSON.parse(prizes); } catch { prizeList = []; }
+    } else if (Array.isArray(prizes)) {
+      prizeList = prizes;
+    }
+
+    if (!title || !type_id || prizeList.length === 0 || !start_date || !end_date || !entry_fee) {
+      await connection.rollback();
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    // Validate & check stock
+    const procurementIds = prizeList.map((p) => Number(p.procurement_id));
+    const [procs] = await connection.query(
+      `SELECT id, title, available_quantity FROM procurements WHERE id IN (?)`,
+      [procurementIds]
+    );
+
+    if (procs.length !== procurementIds.length) {
+      await connection.rollback();
+      return res.status(400).json({ success: false, message: 'Some procurements not found' });
+    }
+
+    for (const prize of prizeList) {
+      const proc = procs.find((p) => p.id === Number(prize.procurement_id));
+      const qty = Number(prize.quantity) || 1;
+      if (qty > (proc.available_quantity || 0)) {
+        await connection.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `"${proc.title}" only has ${proc.available_quantity} available, but you requested ${qty}`,
+        });
+      }
+    }
+
+    const imageFilenames = req.files
+      ? JSON.stringify(req.files.map((f) => f.filename))
+      : JSON.stringify([]);
+
+    // Insert competition
+    const [result] = await connection.query(
+      `INSERT INTO competitions 
+       (title, type_id, procurement_id, description, start_date, end_date, entry_fee,
+        total_participants, total_winners, status, images) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        title,
+        parseInt(type_id),
+        procurementIds[0],
+        description || null,
+        start_date, end_date,
+        parseFloat(entry_fee),
+        parseInt(total_participants) || 100,
+        parseInt(total_winners) || 1,
+        status,
+        imageFilenames,
+      ]
+    );
+
+    const competitionId = result.insertId;
+
+    // Insert each prize with its own quantity
+    const prizeRows = prizeList.map((p) => [
+      competitionId,
+      Number(p.procurement_id),
+      Number(p.quantity) || 1,
+    ]);
+    await connection.query(
+      `INSERT INTO competition_prizes (competition_id, procurement_id, quantity) VALUES ?`,
+      [prizeRows]
+    );
+
+    // ✅ Deduct per-prize quantity
+    for (const p of prizeList) {
+      await connection.query(
+        `UPDATE procurements 
+         SET available_quantity = available_quantity - ?, updated_at = NOW()
+         WHERE id = ?`,
+        [Number(p.quantity) || 1, Number(p.procurement_id)]
+      );
+    }
+
+    await connection.commit();
+    return res.status(201).json({ success: true, id: competitionId, message: 'Competition created' });
+  } catch (err) {
+    await connection.rollback();
+    console.error(err);
+    return res.status(500).json({ success: false, message: err.sqlMessage || err.message });
+  } finally {
+    connection.release();
+  }
+};
+
+
+// Update competition
+// controllers/competitionController.js
+export const updateCompetition = async (req, res) => {
+  const connection = await db.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const { id } = req.params;
     const {
       title,
       type_id,
-      procurement_id,
+      procurement_ids,
       description,
       start_date,
       end_date,
       entry_fee,
       total_participants,
       total_winners = 1,
-      status = 'Active',
+      status,
     } = req.body;
 
-    // Validate
-    if (!title || !type_id || !procurement_id || !start_date || !end_date || !entry_fee) {
-      return res.status(400).json({ message: 'Missing required fields' });
+    // Normalize ids
+    let newProcurementIds = [];
+    if (Array.isArray(procurement_ids)) {
+      newProcurementIds = procurement_ids;
+    } else if (typeof procurement_ids === 'string') {
+      try {
+        newProcurementIds = JSON.parse(procurement_ids);
+      } catch {
+        newProcurementIds = procurement_ids.split(',').map((s) => s.trim());
+      }
     }
-
-    // Check if procurement has enough available quantity
-    const [procurement] = await db.query(
-      'SELECT id, title, available_quantity, quantity FROM procurements WHERE id = ?',
-      [procurement_id]
-    );
-
-    if (!procurement.length) {
-      return res.status(404).json({ message: 'Procurement not found' });
-    }
+    newProcurementIds = [...new Set(newProcurementIds.filter(Boolean).map(Number))];
 
     const winnersCount = parseInt(total_winners) || 1;
-    const availableQty = procurement[0].available_quantity || 0;
 
-    if (winnersCount > availableQty) {
-      return res.status(400).json({
-        message: `Not enough items in stock. Only ${availableQty} available but ${winnersCount} winners requested.`,
-        available: availableQty,
-        requested: winnersCount,
-      });
+    // Get existing linked prizes
+    const [existingPrizes] = await connection.query(
+      `SELECT procurement_id FROM competition_prizes WHERE competition_id = ?`,
+      [id]
+    );
+    const existingIds = existingPrizes.map((p) => p.procurement_id);
+
+    // Determine removed + added
+    const removed = existingIds.filter((pid) => !newProcurementIds.includes(pid));
+    const added = newProcurementIds.filter((pid) => !existingIds.includes(pid));
+
+    // Validate added procurements have stock
+    if (added.length > 0) {
+      const [procs] = await connection.query(
+        `SELECT id, title, available_quantity FROM procurements WHERE id IN (?)`,
+        [added]
+      );
+
+      const insufficient = procs.filter((p) => (p.available_quantity || 0) < winnersCount);
+      if (insufficient.length > 0) {
+        await connection.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `Not enough stock. ${insufficient
+            .map((p) => `"${p.title}" has ${p.available_quantity}, need ${winnersCount}`)
+            .join('; ')}`,
+        });
+      }
     }
 
-    const imageFilenames = req.files
-      ? JSON.stringify(req.files.map(f => f.filename))
-      : JSON.stringify([]);
+    // ✅ Restore stock for removed prizes
+    if (removed.length > 0) {
+      await connection.query(
+        `UPDATE procurements 
+         SET available_quantity = available_quantity + ?, updated_at = NOW()
+         WHERE id IN (?)`,
+        [winnersCount, removed]
+      );
+    }
 
-    // Create competition
-    const [result] = await db.query(`
-      INSERT INTO competitions 
-      (title, type_id, procurement_id, description, start_date, end_date, entry_fee, total_participants, total_winners, status, images) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
+    // ✅ Deduct stock for added prizes
+    if (added.length > 0) {
+      await connection.query(
+        `UPDATE procurements 
+         SET available_quantity = available_quantity - ?, updated_at = NOW()
+         WHERE id IN (?)`,
+        [winnersCount, added]
+      );
+    }
+
+    // ✅ Refresh junction table
+    if (removed.length > 0 || added.length > 0) {
+      await connection.query(
+        `DELETE FROM competition_prizes WHERE competition_id = ? AND procurement_id IN (?)`,
+        [id, removed.length > 0 ? removed : [0]]
+      );
+
+      if (added.length > 0) {
+        const rows = added.map((pid) => [id, pid, winnersCount]);
+        await connection.query(
+          `INSERT INTO competition_prizes (competition_id, procurement_id, quantity) VALUES ?`,
+          [rows]
+        );
+      }
+
+      // Update quantity for existing that stayed
+      await connection.query(
+        `UPDATE competition_prizes SET quantity = ? WHERE competition_id = ?`,
+        [winnersCount, id]
+      );
+    }
+
+    // ✅ Update the competition row
+    const updates = {
       title,
       type_id,
-      procurement_id,
-      description || null,
-      start_date,
-      end_date,
-      entry_fee,
-      total_participants || 100,
-      winnersCount,
-      status,
-      imageFilenames
-    ]);
-
-    // ✅ Deduct winners from procurement available_quantity
-    await db.query(`
-      UPDATE procurements 
-      SET available_quantity = available_quantity - ?,
-          updated_at = NOW()
-      WHERE id = ?
-    `, [winnersCount, procurement_id]);
-
-    console.log(`✅ Deducted ${winnersCount} from procurement ${procurement_id}. Remaining: ${availableQty - winnersCount}`);
-
-    res.status(201).json({
-      success: true,
-      id: result.insertId,
-      message: 'Competition created successfully',
-      procurement_remaining: availableQty - winnersCount,
-    });
-  } catch (err) {
-    console.error('Create Competition Error:', err);
-    res.status(500).json({ message: err.message });
-  }
-};
-
-// Update competition
-export const updateCompetition = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const {
-      title,
-      type_id,
-      procurement_id,
+      procurement_id: newProcurementIds[0] || null,
       description,
       start_date,
       end_date,
       entry_fee,
       total_participants,
-      total_winners,
+      total_winners: winnersCount,
       status,
-    } = req.body;
+    };
 
-    // Get existing competition to check if procurement/winners changed
-    const [existing] = await db.query('SELECT * FROM competitions WHERE id = ?', [id]);
-    if (!existing.length) {
-      return res.status(404).json({ message: 'Competition not found' });
-    }
-
-    const oldProcurementId = existing[0].procurement_id;
-    const oldWinners = existing[0].total_winners || 1;
-    const newWinners = parseInt(total_winners) || 1;
-    const newProcurementId = procurement_id || oldProcurementId;
-
-    // If procurement or winners changed, adjust stock
-    if (oldProcurementId != newProcurementId || oldWinners !== newWinners) {
-      // Restore old procurement
-      await db.query(`
-        UPDATE procurements 
-        SET available_quantity = available_quantity + ?
-        WHERE id = ?
-      `, [oldWinners, oldProcurementId]);
-
-      // Deduct from new procurement
-      const [procurement] = await db.query(
-        'SELECT available_quantity FROM procurements WHERE id = ?',
-        [newProcurementId]
-      );
-
-      if (procurement.length && newWinners > procurement[0].available_quantity) {
-        // Rollback
-        await db.query(`
-          UPDATE procurements 
-          SET available_quantity = available_quantity - ?
-          WHERE id = ?
-        `, [oldWinners, oldProcurementId]);
-
-        return res.status(400).json({
-          message: `Not enough items. Only ${procurement[0].available_quantity} available.`,
-        });
+    const updateFields = [];
+    const values = [];
+    for (const [k, v] of Object.entries(updates)) {
+      if (v !== undefined) {
+        updateFields.push(`${k} = ?`);
+        values.push(v);
       }
-
-      await db.query(`
-        UPDATE procurements 
-        SET available_quantity = available_quantity - ?
-        WHERE id = ?
-      `, [newWinners, newProcurementId]);
     }
 
-    let query = `
-      UPDATE competitions 
-      SET title=?, type_id=?, procurement_id=?, description=?, 
-          start_date=?, end_date=?, entry_fee=?, total_participants=?, 
-          total_winners=?, status=?
-    `;
-    const params = [
-      title, type_id, newProcurementId, description, start_date, end_date,
-      entry_fee, total_participants, newWinners, status
-    ];
-
+    // Handle images
     if (req.files && req.files.length > 0) {
-      const imageFilenames = JSON.stringify(req.files.map(f => f.filename));
-      query += `, images=?`;
-      params.push(imageFilenames);
+      updateFields.push(`images = ?`);
+      values.push(JSON.stringify(req.files.map((f) => f.filename)));
     }
 
-    query += ` WHERE id=?`;
-    params.push(id);
+    values.push(id);
+    await connection.query(
+      `UPDATE competitions SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = ?`,
+      values
+    );
 
-    await db.query(query, params);
+    await connection.commit();
 
-    res.json({ success: true, message: 'Competition updated successfully' });
+    console.log(`✅ Competition ${id} updated. Removed: ${removed.length}, Added: ${added.length}`);
+
+    return res.json({ success: true, message: 'Competition updated successfully' });
   } catch (err) {
-    console.error('Update Competition Error:', err);
-    res.status(500).json({ message: err.message });
+    await connection.rollback();
+    console.error('❌ UPDATE COMPETITION ERROR:', err);
+    return res.status(500).json({ success: false, message: err.sqlMessage || err.message });
+  } finally {
+    connection.release();
   }
 };
 
 // Delete competition - restore stock
+// controllers/competitionController.js
 export const deleteCompetition = async (req, res) => {
+  const connection = await db.getConnection();
+
   try {
+    await connection.beginTransaction();
+
     const { id } = req.params;
 
-    // Get competition to restore stock
-    const [comp] = await db.query('SELECT * FROM competitions WHERE id = ?', [id]);
-    
-    if (comp.length && comp[0].procurement_id) {
-      const winnersToRestore = comp[0].total_winners || 1;
-      await db.query(`
-        UPDATE procurements 
-        SET available_quantity = available_quantity + ?
-        WHERE id = ?
-      `, [winnersToRestore, comp[0].procurement_id]);
+    // Get linked prizes
+    const [prizes] = await connection.query(
+      `SELECT procurement_id, quantity FROM competition_prizes WHERE competition_id = ?`,
+      [id]
+    );
 
-      console.log(`♻️ Restored ${winnersToRestore} to procurement ${comp[0].procurement_id}`);
+    // Get competition (fallback)
+    const [comp] = await connection.query(
+      `SELECT procurement_id, total_winners FROM competitions WHERE id = ?`,
+      [id]
+    );
+
+    // Restore stock for each linked procurement
+    if (prizes.length > 0) {
+      for (const p of prizes) {
+        await connection.query(
+          `UPDATE procurements 
+           SET available_quantity = available_quantity + ?, updated_at = NOW()
+           WHERE id = ?`,
+          [p.quantity || 1, p.procurement_id]
+        );
+      }
+    } else if (comp.length > 0 && comp[0].procurement_id) {
+      // Fallback for old competitions without junction entries
+      await connection.query(
+        `UPDATE procurements 
+         SET available_quantity = available_quantity + ?, updated_at = NOW()
+         WHERE id = ?`,
+        [comp[0].total_winners || 1, comp[0].procurement_id]
+      );
     }
 
-    await db.query('DELETE FROM competitions WHERE id=?', [id]);
-    res.json({ success: true, message: 'Competition deleted successfully' });
+    // Delete competition (junction rows cascade)
+    await connection.query(`DELETE FROM competitions WHERE id = ?`, [id]);
+
+    await connection.commit();
+    res.json({ success: true, message: 'Competition deleted and stock restored' });
   } catch (err) {
-    console.error('Delete Competition Error:', err);
-    res.status(500).json({ message: 'Server error' });
+    await connection.rollback();
+    console.error('❌ DELETE COMPETITION ERROR:', err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    connection.release();
   }
 };
 
@@ -366,6 +547,9 @@ export const getCompetitionFullDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // ============================================
+    // 1. GET COMPETITION BASE INFO
+    // ============================================
     const [comp] = await db.query(`
       SELECT 
         c.*,
@@ -373,27 +557,9 @@ export const getCompetitionFullDetails = async (req, res) => {
         ct.name AS competition_type_name,
         ct.type_name AS competition_type,
         ct.bgcolor AS competition_color,
-        ct.img AS competition_type_image,
-        p.id AS procurement_id,
-        p.title AS procurement_title,
-        p.description AS procurement_description,
-        p.brand AS procurement_brand,
-        p.model AS procurement_model,
-        p.year AS procurement_year,
-        p.location AS procurement_location,
-        p.value AS procurement_value,
-        p.market_value AS procurement_market_value,
-        p.images AS procurement_images,
-        p.available_quantity AS procurement_available,
-        pc.name AS procurement_category_name,
-        pc.slug AS procurement_category_slug,
-        ps.name AS procurement_subcategory_name,
-        ps.slug AS procurement_subcategory_slug
+        ct.img AS competition_type_image
       FROM competitions c
       LEFT JOIN competition_types ct ON c.type_id = ct.id
-      LEFT JOIN procurements p ON c.procurement_id = p.id
-      LEFT JOIN procurement_categories pc ON p.category_id = pc.id
-      LEFT JOIN procurement_subcategories ps ON p.subcategory_id = ps.id
       WHERE c.id = ?
     `, [id]);
 
@@ -401,7 +567,44 @@ export const getCompetitionFullDetails = async (req, res) => {
       return res.status(404).json({ message: 'Competition not found' });
     }
 
-    // Get all tickets
+    // ============================================
+    // 2. GET ALL LINKED PRIZES (junction table)
+    // ============================================
+    const [prizes] = await db.query(`
+      SELECT 
+        cp.procurement_id,
+        cp.quantity,
+        p.id,
+        p.title,
+        p.description,
+        p.brand,
+        p.model,
+        p.year,
+        p.location,
+        p.value,
+        p.market_value,
+        p.purchase_price,
+        p.available_quantity,
+        p.quantity AS total_quantity,
+        p.images,
+        p.attributes,
+        pc.id AS category_id,
+        pc.name AS category_name,
+        pc.slug AS category_slug,
+        ps.id AS subcategory_id,
+        ps.name AS subcategory_name,
+        ps.slug AS subcategory_slug
+      FROM competition_prizes cp
+      JOIN procurements p ON cp.procurement_id = p.id
+      LEFT JOIN procurement_categories pc ON p.category_id = pc.id
+      LEFT JOIN procurement_subcategories ps ON p.subcategory_id = ps.id
+      WHERE cp.competition_id = ?
+      ORDER BY cp.id ASC
+    `, [id]);
+
+    // ============================================
+    // 3. GET ALL TICKETS
+    // ============================================
     const [tickets] = await db.query(`
       SELECT 
         t.*,
@@ -414,7 +617,9 @@ export const getCompetitionFullDetails = async (req, res) => {
       ORDER BY t.created_at DESC
     `, [id]);
 
-    // Get all winners for this competition
+    // ============================================
+    // 4. GET ALL WINNERS
+    // ============================================
     const [winners] = await db.query(`
       SELECT 
         w.*,
@@ -429,7 +634,7 @@ export const getCompetitionFullDetails = async (req, res) => {
       ORDER BY w.won_at ASC
     `, [id]);
 
-    // Also get winners from tickets.is_winner as fallback
+    // Fallback: winners from tickets.is_winner
     const [ticketWinners] = await db.query(`
       SELECT 
         t.id,
@@ -443,21 +648,66 @@ export const getCompetitionFullDetails = async (req, res) => {
       WHERE t.competition_id = ? AND t.is_winner = 1
     `, [id]);
 
+    // ============================================
+    // 5. BUILD RESPONSE
+    // ============================================
     const compData = comp[0];
     compData.images = safeParseJSON(compData.images, []);
-    compData.procurement_images = safeParseJSON(compData.procurement_images, []);
 
-    // Combine winners from both tables
-    let allWinners = winners.length > 0 ? winners : ticketWinners.map(tw => ({
-      name: tw.name,
-      user_email: tw.user_email,
-      ticket_number: tw.ticket_number,
-      user_id: tw.user_id,
-      status: 'pending',
+    // Parse prize images & attributes
+    const parsedPrizes = prizes.map((p) => ({
+      procurement_id: p.procurement_id,
+      quantity: p.quantity || 1,
+      id: p.id,
+      title: p.title,
+      description: p.description,
+      brand: p.brand,
+      model: p.model,
+      year: p.year,
+      location: p.location,
+      value: p.value,
+      market_value: p.market_value,
+      purchase_price: p.purchase_price,
+      available_quantity: p.available_quantity,
+      total_quantity: p.total_quantity,
+      images: safeParseJSON(p.images, []),
+      attributes: safeParseJSON(p.attributes, {}),
+      category_id: p.category_id,
+      category_name: p.category_name,
+      category_slug: p.category_slug,
+      subcategory_id: p.subcategory_id,
+      subcategory_name: p.subcategory_name,
+      subcategory_slug: p.subcategory_slug,
     }));
+
+    // Legacy fields (first prize) for backward compatibility
+    const firstPrize = parsedPrizes[0] || null;
+    compData.procurement_id = firstPrize?.procurement_id || null;
+    compData.procurement_title = firstPrize?.title || null;
+    compData.procurement_brand = firstPrize?.brand || null;
+    compData.procurement_model = firstPrize?.model || null;
+    compData.procurement_value = firstPrize?.value || null;
+    compData.procurement_market_value = firstPrize?.market_value || null;
+    compData.procurement_images = firstPrize?.images || [];
+    compData.procurement_category_name = firstPrize?.category_name || null;
+    compData.procurement_subcategory_name = firstPrize?.subcategory_name || null;
+    compData.procurement_available = firstPrize?.available_quantity || 0;
+
+    // Combine winners
+    let allWinners = winners.length > 0
+      ? winners
+      : ticketWinners.map((tw) => ({
+          name: tw.name,
+          user_name: tw.name,
+          user_email: tw.user_email,
+          ticket_number: tw.ticket_number,
+          user_id: tw.user_id,
+          status: 'pending',
+        }));
 
     res.json({
       competition: compData,
+      prizes: parsedPrizes,       // ✅ NEW — all linked prizes
       tickets,
       winners: allWinners,
       winner: allWinners[0] || null, // backward compatibility

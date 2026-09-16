@@ -9,7 +9,7 @@ import adminRoutes from './routes/adminRoutes.js';
 import procurementRoutes from './routes/procurementRoutes.js';
 import competitionRoutes from './routes/competitionRoutes.js';
 import path from "path";
-
+import competitionTypeRoutes from './routes/competitionTypeRoutes.js';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -72,7 +72,7 @@ app.use('/api/pay', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/adminProcurements', procurementRoutes);
 app.use('/api/adminCompetitions', competitionRoutes);
-
+app.use('/api/adminCompetitionTypes', competitionTypeRoutes);
 // Simple root check
 app.get('/', (req, res) => {
   res.send('Keboka API is running!');

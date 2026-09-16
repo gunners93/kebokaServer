@@ -121,7 +121,7 @@ export const deleteProcurement = async (req, res) => {
 // COMPETITION TYPES
 // ============================================
 
-export const getCompetitionTypes = async (req, res) => {
+export const getCompetitionTypesOLD = async (req, res) => {
   try {
     console.log("🔥 getCompetitionTypes HIT");
     const [rows] = await db.query("SELECT * FROM competition_types");
@@ -131,6 +131,36 @@ export const getCompetitionTypes = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+// controllers/webController.js
+
+// ============================================
+// GET ALL COMPETITION TYPES
+// ============================================
+export const getCompetitionTypes = async (req, res) => {
+  try {
+    const [rows] = await db.query(`
+      SELECT 
+        ct.id,
+        ct.name,
+        ct.type_name,
+        ct.tag,
+        ct.bgcolor,
+        ct.img,
+        ct.created_at,
+        (SELECT COUNT(*) FROM competitions c WHERE c.type_id = ct.id) AS competition_count
+      FROM competition_types ct
+      ORDER BY ct.name ASC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ getCompetitionTypes error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ============================================
+// ✅ GET SINGLE COMPETITION TYPE BY type_name
+// ============================================
 
 // ============================================
 // COMPETITIONS
