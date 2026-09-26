@@ -422,7 +422,7 @@ export const getLiveDraws = async (req, res) => {
           WHEN c.winners_drawn > 0 AND c.winners_drawn < c.total_winners THEN 1
           ELSE 2
         END,
-        c.updated_at DESC
+        c.end_date ASC
       LIMIT 20
     `);
 

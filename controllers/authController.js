@@ -88,6 +88,7 @@ export const registerUser = async (req, res) => {
 // };
 
 export const loginUser = async (req, res) => {
+  console.log("useremail");
   const { email, password } = req.body;
 
   if (!email || !password)
@@ -131,12 +132,12 @@ export const loginUser = async (req, res) => {
 console.log(`Login notification email sent to ${email}`);
 
 
-    // res.status(200).json({
-    //   success: true,
-    //   message: "Login successful",
-    //   user: safeUser,
-    //   token,
-    // });
+    res.status(200).json({
+      success: true,
+      message: "Login successful",
+      user: safeUser,
+      token,
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server error" });
