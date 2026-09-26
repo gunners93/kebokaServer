@@ -232,7 +232,7 @@ export const sendWelcomeEmail = async (to, name) => {
         </a>
       </p>
 
-      ${ctaButton(`${WEBSITE}/login`, "PLAY TODAY »")}
+      ${ctaButton(`${WEBSITE}/auth`, "PLAY TODAY »")}
 
       ${featureIcons()}
 
@@ -282,7 +282,7 @@ export const sendLoginNotification = async (to, name, { ip, userAgent, time } = 
       </table>
       <p>If this was you, no action is needed.</p>
       <p style="color:#c0392b;"><strong>If this wasn't you</strong>, reset your password immediately and contact support.</p>
-      ${ctaButton(`${WEBSITE}/forgot-password`, "RESET PASSWORD »")}
+      ${ctaButton(`${WEBSITE}/auth`, "RESET PASSWORD »")}
     `,
   });
 
