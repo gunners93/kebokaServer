@@ -486,36 +486,90 @@ export const getCompetitionFullDetails = async (req, res) => {
 export const drawCompetitionWinner = async (req, res) => {
   const { id } = req.params;
   try {
+    const [comp] = await db.query(
+      `SELECT c.*, p.title AS prize_name
+       FROM competitions c
+       LEFT JOIN procurements p ON c.procurement_id = p.id
+       WHERE c.id = ?`,
+      [id]
+    );
+    if (!comp.length) return res.status(404).json({ message: "Competition not found" });
+
     const [tickets] = await db.query(
       "SELECT id, ticket_number, user_id FROM tickets WHERE competition_id = ?",
       [id]
     );
-
     if (tickets.length === 0) {
       return res.status(400).json({ message: "No tickets have been sold for this competition." });
     }
 
-    const randomIndex = Math.floor(Math.random() * tickets.length);
-    const winningTicket = tickets[randomIndex];
+    const winningTicket = tickets[Math.floor(Math.random() * tickets.length)];
 
     await db.query("UPDATE tickets SET is_winner = 1 WHERE id = ?", [winningTicket.id]);
-    await db.query("UPDATE competitions SET status = 'Closed' WHERE id = ?", [id]);
-
-    const [winnerDetails] = await db.query(
-      "SELECT fullname, email FROM users WHERE id = ?",
-      [winningTicket.user_id]
+    await db.query(
+      `UPDATE competitions
+       SET status = 'Closed', winner_id = ?, winning_ticket_number = ?
+       WHERE id = ?`,
+      [winningTicket.user_id, winningTicket.ticket_number, id]
     );
 
-    res.json({
+    // ✅ Save to winners table too
+    await db.query(
+      `INSERT INTO winners (user_id, competition_id, ticket_id, prize_amount, status, won_at, created_at)
+       VALUES (?, ?, ?, 0, 'pending', NOW(), NOW())`,
+      [winningTicket.user_id, id, winningTicket.id]
+    );
+
+    // ✅ Fetch all participants (for "results in" email)
+    const [participants] = await db.query(
+      `SELECT DISTINCT u.id, u.name, u.email
+       FROM users u
+       JOIN tickets t ON t.user_id = u.id
+       WHERE t.competition_id = ?`,
+      [id]
+    );
+
+    // ✅ Fetch winner details
+    const [winnerRows] = await db.query(
+      "SELECT name, email FROM users WHERE id = ?",
+      [winningTicket.user_id]
+    );
+    const winner = winnerRows[0];
+
+    // ✅ Send draw emails to everyone (winner gets a different template)
+    const info = {
+      title: comp[0].title,
+      drawDate: new Date().toLocaleString(),
+      prizeName: comp[0].prize_name || "the prize",
+      winnerName: winner?.name || "See live draw",
+      resultsUrl: `https://www.keboka.com/winners`,
+    };
+
+    for (const p of participants) {
+      try {
+        await sendDrawNotification(p.email, p.name, {
+          ...info,
+          isWinner: p.id === winningTicket.user_id,
+        });
+      } catch (err) {
+        console.error(`⚠️ Draw email failed for ${p.email}:`, err.message);
+      }
+    }
+
+    return res.json({
+      success: true,
       message: "Winner drawn successfully!",
       winner: {
-        name: winnerDetails[0].fullname,
+        name: winner?.name,
+        email: winner?.email,
         ticket: winningTicket.ticket_number,
+        user_id: winningTicket.user_id,
       },
+      notified: participants.length,
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Error during the draw process" });
+    console.error("❌ Draw Error:", err);
+    return res.status(500).json({ message: "Error during the draw process" });
   }
 };
 
@@ -669,87 +723,70 @@ export const updateOrderStatus = async (req, res) => {
 
 export const adminCreateTickets = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Only admins can create tickets manually',
-      });
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ success: false, message: "Only admins can create tickets manually" });
     }
 
     const { reference } = req.body;
-
     if (!reference) {
-      return res.status(400).json({
-        success: false,
-        message: 'Reference is required',
-      });
+      return res.status(400).json({ success: false, message: "Reference is required" });
     }
 
-    console.log(`🎫 Creating tickets manually for reference: ${reference}`);
-
-    const [order] = await db.query(
-      `SELECT * FROM orders WHERE reference = ?`,
-      [reference]
-    );
-
+    const [order] = await db.query(`SELECT * FROM orders WHERE reference = ?`, [reference]);
     if (!order.length) {
       return res.status(404).json({
         success: false,
         message: `Order with reference: ${reference} not found`,
       });
     }
-
-    if (order[0].status === 'paid') {
-      return res.status(400).json({
-        success: false,
-        message: 'Order is already paid',
-      });
+    if (order[0].status === "paid") {
+      return res.status(400).json({ success: false, message: "Order is already paid" });
     }
 
-    let items;
-    if (typeof order[0].items === 'string') {
-      items = JSON.parse(order[0].items);
-    } else {
-      items = order[0].items;
-    }
+    const items = typeof order[0].items === "string" ? JSON.parse(order[0].items) : order[0].items;
 
-    await db.query(
-      `UPDATE orders SET status = 'paid' WHERE id = ?`,
-      [order[0].id]
-    );
+    await db.query(`UPDATE orders SET status = 'paid' WHERE id = ?`, [order[0].id]);
 
-    let ticketCount = 0;
     const createdTickets = [];
-
     for (const item of items) {
       const quantity = parseInt(item.quantity) || 1;
       for (let i = 0; i < quantity; i++) {
         const ticketNumber = `TKT${Date.now()}${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
         const [result] = await db.query(
-          `INSERT INTO tickets (user_id, competition_id, order_id, ticket_number, status, created_at) 
-           VALUES (?, ?, ?, ?, ?, NOW())`,
-          [order[0].user_id, item.competition_id, order[0].id, ticketNumber, 'active']
+          `INSERT INTO tickets (user_id, competition_id, order_id, ticket_number, status, created_at)
+           VALUES (?, ?, ?, ?, 'active', NOW())`,
+          [order[0].user_id, item.competition_id, order[0].id, ticketNumber]
         );
-        createdTickets.push(result.insertId);
-        ticketCount++;
+        createdTickets.push({
+          ticketNumber,
+          ticket_id: item.competition_id,
+          competitionTitle: item.title || `Competition #${item.competition_id}`,
+        });
       }
     }
 
-    console.log(`✅ Created ${ticketCount} tickets for order ${reference}`);
+    // ✅ Send tickets email
+    try {
+      const [u] = await db.query("SELECT name, email FROM users WHERE id = ?", [order[0].user_id]);
+      if (u.length) {
+        await sendTicketsEmail(u[0].email, u[0].name, createdTickets, reference);
+      }
+    } catch (emailErr) {
+      console.error("⚠️ Tickets email failed:", emailErr.message);
+    }
 
     return res.status(200).json({
       success: true,
-      message: `Created ${ticketCount} tickets for order ${reference}`,
+      message: `Created ${createdTickets.length} tickets for order ${reference}`,
       order_id: order[0].id,
-      tickets_created: ticketCount,
+      tickets_created: createdTickets.length,
       ticket_ids: createdTickets,
     });
-
   } catch (error) {
-    console.error('❌ Admin Create Tickets Error:', error);
+    console.error("❌ Admin Create Tickets Error:", error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to create tickets',
+      message: "Failed to create tickets",
       error: error.message,
     });
   }
@@ -1215,19 +1252,15 @@ export const getTicketById = async (req, res) => {
 
 export const declareWinner = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Admin only.',
-      });
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ success: false, message: "Access denied. Admin only." });
     }
 
     const { competitionId, ticketNumber, prizeAmount } = req.body;
-
     if (!competitionId || !ticketNumber) {
       return res.status(400).json({
         success: false,
-        message: 'Competition ID and ticket number are required',
+        message: "Competition ID and ticket number are required",
       });
     }
 
@@ -1235,11 +1268,10 @@ export const declareWinner = async (req, res) => {
       `SELECT * FROM tickets WHERE ticket_number = ? AND competition_id = ?`,
       [ticketNumber, competitionId]
     );
-
     if (!ticket.length) {
       return res.status(404).json({
         success: false,
-        message: 'Ticket not found for this competition',
+        message: "Ticket not found for this competition",
       });
     }
 
@@ -1247,18 +1279,17 @@ export const declareWinner = async (req, res) => {
       `SELECT * FROM winners WHERE competition_id = ? AND ticket_id = ?`,
       [competitionId, ticket[0].id]
     );
-
     if (existingWinner.length) {
       return res.status(400).json({
         success: false,
-        message: 'This ticket is already a winner',
+        message: "This ticket is already a winner",
       });
     }
 
     const [result] = await db.query(
-      `INSERT INTO winners (user_id, competition_id, ticket_id, prize_amount, status, won_at, created_at) 
-       VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
-      [ticket[0].user_id, competitionId, ticket[0].id, prizeAmount || 0, 'pending']
+      `INSERT INTO winners (user_id, competition_id, ticket_id, prize_amount, status, won_at, created_at)
+       VALUES (?, ?, ?, ?, 'pending', NOW(), NOW())`,
+      [ticket[0].user_id, competitionId, ticket[0].id, prizeAmount || 0]
     );
 
     await db.query(
@@ -1266,23 +1297,51 @@ export const declareWinner = async (req, res) => {
       [ticket[0].user_id, ticketNumber, competitionId]
     );
 
-    res.status(200).json({
+    // ✅ Send winner email
+    try {
+      const [winnerUser] = await db.query(
+        "SELECT name, email FROM users WHERE id = ?",
+        [ticket[0].user_id]
+      );
+      const [comp] = await db.query(
+        `SELECT c.*, p.title AS prize_name
+         FROM competitions c
+         LEFT JOIN procurements p ON c.procurement_id = p.id
+         WHERE c.id = ?`,
+        [competitionId]
+      );
+
+      if (winnerUser.length) {
+        await sendDrawNotification(winnerUser[0].email, winnerUser[0].name, {
+          title: comp[0]?.title || "Competition",
+          drawDate: new Date().toLocaleString(),
+          prizeName: comp[0]?.prize_name || "the prize",
+          winnerName: winnerUser[0].name,
+          isWinner: true,
+          resultsUrl: `https://www.keboka.com/winners`,
+        });
+      }
+    } catch (emailErr) {
+      console.error("⚠️ Winner email failed:", emailErr.message);
+    }
+
+    return res.status(200).json({
       success: true,
-      message: 'Winner declared successfully!',
+      message: "Winner declared successfully!",
       data: {
         id: result.insertId,
         user_id: ticket[0].user_id,
         competition_id: competitionId,
         ticket_number: ticketNumber,
         prize_amount: prizeAmount || 0,
-        status: 'pending',
+        status: "pending",
       },
     });
   } catch (err) {
-    console.error('❌ Declare Winner Error:', err);
-    res.status(500).json({
+    console.error("❌ Declare Winner Error:", err);
+    return res.status(500).json({
       success: false,
-      message: 'Failed to declare winner',
+      message: "Failed to declare winner",
       error: err.message,
     });
   }

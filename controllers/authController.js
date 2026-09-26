@@ -2,6 +2,8 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import db from "../config/db.js";
  import { generateToken } from "../utils/generateToken.js";
+ import { sendWelcomeEmail, sendLoginNotification } from "../services/email.service.js";
+
 export const registerUser = async (req, res) => {
   const { name, email, password, confirmPassword } = req.body;
 
@@ -34,6 +36,7 @@ export const registerUser = async (req, res) => {
     // Optionally return created user info without token
     const user = { id: result.insertId, name, email };
  await sendWelcomeEmail(email, name);
+
     res.status(201).json({
       success: true,
       message: "Registration successful. Please log in.",
@@ -118,12 +121,22 @@ export const loginUser = async (req, res) => {
 
     const { password: _, ...safeUser } = user; // remove password
 
-    res.status(200).json({
-      success: true,
-      message: "Login successful",
-      user: safeUser,
-      token,
-    });
+
+    await sendLoginNotification(email, user.name, {
+  ip: req.ip,
+  userAgent: req.headers["user-agent"],
+  time: new Date().toLocaleString(),
+});
+//login notification email sent
+console.log(`Login notification email sent to ${email}`);
+
+
+    // res.status(200).json({
+    //   success: true,
+    //   message: "Login successful",
+    //   user: safeUser,
+    //   token,
+    // });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server error" });

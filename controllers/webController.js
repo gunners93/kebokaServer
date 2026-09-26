@@ -173,7 +173,7 @@ export const getCompetitions_web = async (req, res) => {
        LEFT JOIN procurements p ON c.procurement_id = p.id
        LEFT JOIN procurement_categories pc ON p.category_id = pc.id
        LEFT JOIN procurement_subcategories ps ON p.subcategory_id = ps.id
-       ORDER BY c.id DESC`
+       ORDER BY c.end_date  ASC`
     );
 
     const data = rows.map((item) => ({
@@ -226,7 +226,7 @@ export const getcompetitionstype_web = async (req, res) => {
        LEFT JOIN procurement_categories pc ON p.category_id = pc.id
        LEFT JOIN procurement_subcategories ps ON p.subcategory_id = ps.id
        WHERE ct.type_name = ?
-       ORDER BY c.id DESC`,
+       ORDER BY c.end_date  ASC`,
       [where]
     );
 

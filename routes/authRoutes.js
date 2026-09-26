@@ -4,7 +4,8 @@ import { verifyToken } from '../middleware/authMiddleware.js';
 import { upload } from "../middleware/upload.js";
 import { createCompetition,getProcurements ,createProcurement, updateProcurement, deleteProcurement,getCompetitions,getCompetitionTypes,adminLogin,getCompetitionFullDetails} from '../controllers/adminController.js';
 import { getPrizeDetails,getCompetitionById,getCompetitions_web,getcompetitionstype_web,getMyTickets,updateBankDetails} from '../controllers/webController.js';
-import {sendForgotPasswordEmail,resetPassword} from '../controllers/emailUtility.js';
+// import {sendForgotPasswordEmail,resetPassword} from '../controllers/emailUtility.js';
+import { sendForgotPasswordEmail, resetPassword } from '../services/email.js';
 import {purchaseTickets} from '../controllers/tickets.js';
 //procurements 
 
