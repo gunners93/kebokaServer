@@ -3,7 +3,7 @@ import { registerUser, loginUser,getMe,userProfileUpdate } from '../controllers/
 import { verifyToken } from '../middleware/authMiddleware.js';
 import { upload } from "../middleware/upload.js";
 import { createCompetition,getProcurements ,createProcurement, updateProcurement, deleteProcurement,getCompetitions,getCompetitionTypes,adminLogin,getCompetitionFullDetails} from '../controllers/adminController.js';
-import { getPrizeDetails,getCompetitionById,getCompetitions_web,getcompetitionstype_web,getMyTickets,updateBankDetails} from '../controllers/webController.js';
+import { getPrizeDetails,getCompetitionById,getCompetitions_web,getcompetitionstype_web,getMyTickets,updateBankDetails,getMyCompetitions} from '../controllers/webController.js';
 // import {sendForgotPasswordEmail,resetPassword} from '../controllers/emailUtility.js';
 import { sendForgotPasswordEmail, resetPassword } from '../services/email.js';
 import {purchaseTickets} from '../controllers/tickets.js';
@@ -92,6 +92,7 @@ router.post('/upload-kyc',
 )
 //my-tickets
 router.get('/my-tickets', verifyToken, getMyTickets);
+router.get('/my-Competitions', verifyToken, getMyCompetitions);
 router.put('/update-bank', verifyToken, updateBankDetails);
 router.get('/competitions/:id/full-details',verifyToken,getCompetitionFullDetails);
 

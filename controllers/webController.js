@@ -725,6 +725,148 @@ export const getSchools = async (req, res) => {
   }
 };
 
+
+// GET /api/v2/my-Competitions
+// controllers/webController.js
+export const getMyCompetitions = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // 1. Get all orders for this user
+    const [orders] = await db.query(
+      `SELECT id, reference, total_amount, status, items, payment_method, created_at
+       FROM orders
+       WHERE user_id = ?
+       ORDER BY created_at DESC`,
+      [userId]
+    );
+
+    if (orders.length === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
+    // 2. Get tickets joined with competitions AND competition_types
+    const orderIds = orders.map((o) => o.id);
+
+    // ✅ Safe IN (?) expansion
+    const placeholders = orderIds.map(() => '?').join(',');
+
+    const [tickets] = await db.query(
+      `SELECT
+         t.id,
+         t.ticket_number,
+         t.status          AS ticket_status,
+         t.is_winner,
+         t.order_id,
+         t.competition_id,
+         t.created_at      AS ticket_created_at,
+
+         -- competition fields
+         c.title           AS competition_title,
+         c.images          AS competition_images,
+         c.end_date        AS competition_end_date,
+         c.entry_fee,
+         c.total_winners,
+         (SELECT COUNT(*) FROM winners w WHERE w.competition_id = c.id) AS winners_count,
+
+         -- competition_types fields (joined via type_id)
+         ct.id             AS type_id,
+         ct.name           AS type_name_display,
+         ct.type_name      AS type_key,
+         ct.bgcolor,
+         ct.tag            AS type_tag,
+         ct.img            AS type_img
+       FROM tickets t
+       LEFT JOIN competitions c       ON c.id = t.competition_id
+       LEFT JOIN competition_types ct ON ct.id = c.type_id
+       WHERE t.user_id = ? AND t.order_id IN (${placeholders})
+       ORDER BY t.created_at DESC`,
+      [userId, ...orderIds]
+    );
+
+    // 3. Group tickets by (order_id → competition_id)
+    const ticketsByOrder = {};
+    for (const t of tickets) {
+      if (!ticketsByOrder[t.order_id]) ticketsByOrder[t.order_id] = {};
+      if (!ticketsByOrder[t.order_id][t.competition_id]) {
+        ticketsByOrder[t.order_id][t.competition_id] = {
+          competition_id: t.competition_id,
+          competition_title: t.competition_title || 'Competition',
+          competition_images: safeParseImages(t.competition_images),
+          competition_end_date: t.competition_end_date,
+          entry_fee: t.entry_fee,
+
+          // ✅ From competition_types (joined via type_id)
+          type_id: t.type_id,
+          type_name: t.type_key,              // "BillonaireJackpot"
+          type_display: t.type_name_display,  // "Billonaire Jackpot"
+          type_tag: t.type_tag,
+          type_img: t.type_img,
+          bgcolor: t.bgcolor || 'bg-blue-500',
+
+          total_winners: t.total_winners,
+          winners_count: t.winners_count,
+          tickets: [],
+        };
+      }
+      ticketsByOrder[t.order_id][t.competition_id].tickets.push({
+        id: t.id,
+        ticket_number: t.ticket_number,
+        status: t.ticket_status,
+        is_winner: !!t.is_winner,
+        created_at: t.ticket_created_at,
+      });
+    }
+
+    // 4. Assemble final shape
+    const result = orders.map((order) => {
+      const grouped = ticketsByOrder[order.id] || {};
+      const competitions = Object.values(grouped).map((c) => ({
+        ...c,
+        ticket_count: c.tickets.length,
+        is_winner: c.tickets.some((t) => t.is_winner),
+      }));
+
+      return {
+        order_id: order.id,
+        reference: order.reference,
+        total_amount: order.total_amount,
+        status: order.status,
+        payment_method: order.payment_method,
+        created_at: order.created_at,
+        competition_count: competitions.length,
+        ticket_count: competitions.reduce((s, c) => s + c.ticket_count, 0),
+        competitions,
+      };
+    });
+
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('getMyCompetitions error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to load competitions',
+      error: err.message,
+    });
+  }
+};
+
+
+
+// helper
+const safeParseImages = (val) => {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  try {
+    const parsed = JSON.parse(val);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+
+
 // ============================================
 // GET MY TICKETS
 // ============================================
