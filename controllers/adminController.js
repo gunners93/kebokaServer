@@ -2,6 +2,68 @@
 import db from "../config/db.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import {
+  sendOrderInvoice,
+  sendPaymentReceipt,
+  sendTicketsEmail,
+  sendDrawNotification,
+} from "../services/email.service.js";
+
+// ============================================
+// EMAIL HELPERS
+// ============================================
+
+/**
+ * Send all post-payment emails for an order.
+ * Wrapped in try/catch so email failures never break the API response.
+ */
+const sendOrderEmails = async ({ order, user, createdTickets = [] }) => {
+  if (!user?.email) return;
+
+  const items =
+    typeof order.items === "string" ? JSON.parse(order.items) : order.items || [];
+  const amount = order.total_amount || order.amount || 0;
+
+  // 1. Order invoice
+  try {
+    await sendOrderInvoice(user.email, user.name, {
+      reference: order.reference,
+      amount,
+      items,
+      status: order.status || "paid",
+      createdAt: order.created_at || new Date().toLocaleString(),
+    });
+  } catch (err) {
+    console.error("⚠️ Order invoice email failed:", err.message);
+  }
+
+  // 2. Payment receipt
+  try {
+    await sendPaymentReceipt(user.email, user.name, {
+      reference: order.reference,
+      amount,
+      method: order.payment_method || "GBiPayments",
+      transactionId: order.transaction_id,
+      paidAt: new Date().toLocaleString(),
+    });
+  } catch (err) {
+    console.error("⚠️ Payment receipt email failed:", err.message);
+  }
+
+  // 3. Tickets list (only if tickets were created)
+  if (createdTickets.length > 0) {
+    try {
+      await sendTicketsEmail(
+        user.email,
+        user.name,
+        createdTickets,
+        order.reference
+      );
+    } catch (err) {
+      console.error("⚠️ Tickets email failed:", err.message);
+    }
+  }
+};
 
 // ============================================
 // AUTHENTICATION
@@ -11,7 +73,9 @@ export const adminLogin = async (req, res) => {
   const { username, password } = req.body;
 
   try {
-    const [rows] = await db.query("SELECT * FROM adminlog WHERE username = ?", [username]);
+    const [rows] = await db.query("SELECT * FROM adminlog WHERE username = ?", [
+      username,
+    ]);
 
     if (rows.length === 0) {
       return res.status(401).json({ success: false, message: "Invalid Admin" });
@@ -21,12 +85,14 @@ export const adminLogin = async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, admin.password);
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: "Invalid Credentials" });
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid Credentials" });
     }
 
     const token = jwt.sign(
-      { id: admin.id, role: 'admin' }, 
-      process.env.JWT_SECRET, 
+      { id: admin.id, role: "admin" },
+      process.env.JWT_SECRET,
       { expiresIn: "1d" }
     );
 
@@ -37,8 +103,8 @@ export const adminLogin = async (req, res) => {
         Id: admin.id,
         name: admin.full_name || "Administrator",
         username: admin.username,
-        role: "admin"
-      }
+        role: "admin",
+      },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -51,7 +117,9 @@ export const adminLogin = async (req, res) => {
 
 export const getProcurements = async (req, res) => {
   try {
-    const [rows] = await db.query("SELECT * FROM procurements ORDER BY id DESC");
+    const [rows] = await db.query(
+      "SELECT * FROM procurements ORDER BY id DESC"
+    );
     const data = rows.map((item) => ({
       ...item,
       images: item.images ? JSON.parse(item.images) : [],
@@ -64,13 +132,24 @@ export const getProcurements = async (req, res) => {
 };
 
 export const createProcurement = async (req, res) => {
-  const { type, title, description, brand, model, year, location, price } = req.body;
+  const { type, title, description, brand, model, year, location, price } =
+    req.body;
   const imageFiles = req.files ? req.files.map((f) => f.filename) : [];
 
   try {
     const [result] = await db.query(
       "INSERT INTO procurements (type, title, description, brand, model, year, location, price, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [type, title, description, brand, model, year, location, price, JSON.stringify(imageFiles)]
+      [
+        type,
+        title,
+        description,
+        brand,
+        model,
+        year,
+        location,
+        price,
+        JSON.stringify(imageFiles),
+      ]
     );
 
     res.status(201).json({
@@ -93,7 +172,8 @@ export const createProcurement = async (req, res) => {
 
 export const updateProcurement = async (req, res) => {
   const { id } = req.params;
-  const { type, title, description, brand, model, year, location, price } = req.body;
+  const { type, title, description, brand, model, year, location, price } =
+    req.body;
   try {
     await db.query(
       "UPDATE procurements SET type = ?, title = ?, description = ?, brand = ?, model = ?, year = ?, location = ?, price = ? WHERE id = ?",
@@ -131,11 +211,7 @@ export const getCompetitionTypesOLD = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
-// controllers/webController.js
 
-// ============================================
-// GET ALL COMPETITION TYPES
-// ============================================
 export const getCompetitionTypes = async (req, res) => {
   try {
     const [rows] = await db.query(`
@@ -153,20 +229,15 @@ export const getCompetitionTypes = async (req, res) => {
     `);
     res.json(rows);
   } catch (err) {
-    console.error('❌ getCompetitionTypes error:', err);
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error("❌ getCompetitionTypes error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
-// ============================================
-// ✅ GET SINGLE COMPETITION TYPE BY type_name
-// ============================================
 
 // ============================================
 // COMPETITIONS
 // ============================================
 
-// controllers/adminController.js
 export const getCompetitions = async (req, res) => {
   try {
     const [rows] = await db.query(`
@@ -205,10 +276,9 @@ export const getCompetitions = async (req, res) => {
       ORDER BY c.id DESC
     `);
 
-    // Safe JSON parse
     const safeParse = (val, fallback = []) => {
       if (!val) return fallback;
-      if (typeof val === 'object') return val;
+      if (typeof val === "object") return val;
       try {
         const parsed = JSON.parse(val);
         return Array.isArray(parsed) ? parsed : [parsed];
@@ -217,7 +287,7 @@ export const getCompetitions = async (req, res) => {
       }
     };
 
-    const data = rows.map(c => ({
+    const data = rows.map((c) => ({
       ...c,
       images: safeParse(c.images, []),
       procurement_images: safeParse(c.procurement_images, []),
@@ -225,12 +295,10 @@ export const getCompetitions = async (req, res) => {
 
     res.json(data);
   } catch (err) {
-    console.error('❌ getCompetitions error:', err);
-    res.status(500).json({ message: 'Server error' });
+    console.error("❌ getCompetitions error:", err);
+    res.status(500).json({ message: "Server error" });
   }
 };
-
-// controllers/competitionController.js
 
 export const createCompetition = async (req, res) => {
   try {
@@ -238,7 +306,7 @@ export const createCompetition = async (req, res) => {
     console.log("📥 CREATE COMPETITION REQUEST");
     console.log("========================================");
     console.log("Body:", req.body);
-    console.log("Files:", req.files?.map(f => f.filename));
+    console.log("Files:", req.files?.map((f) => f.filename));
 
     const {
       title,
@@ -250,15 +318,21 @@ export const createCompetition = async (req, res) => {
       entry_fee,
       total_participants,
       total_winners = 1,
-      status = 'Active',
+      status = "Active",
     } = req.body;
 
-    // ✅ VALIDATE REQUIRED FIELDS
-    if (!title || !type_id || !procurement_id || !start_date || !end_date || !entry_fee) {
+    if (
+      !title ||
+      !type_id ||
+      !procurement_id ||
+      !start_date ||
+      !end_date ||
+      !entry_fee
+    ) {
       console.log("❌ Missing required fields");
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields',
+        message: "Missing required fields",
         missing: {
           title: !title,
           type_id: !type_id,
@@ -270,10 +344,9 @@ export const createCompetition = async (req, res) => {
       });
     }
 
-    // ✅ CHECK PROCUREMENT EXISTS
     console.log(`🔍 Checking procurement ID: ${procurement_id}`);
     const [procurement] = await db.query(
-      'SELECT id, title, available_quantity, quantity FROM procurements WHERE id = ?',
+      "SELECT id, title, available_quantity, quantity FROM procurements WHERE id = ?",
       [procurement_id]
     );
     console.log("🔍 Procurement result:", procurement);
@@ -283,14 +356,13 @@ export const createCompetition = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: `Procurement with ID ${procurement_id} does not exist.`,
-        hint: 'The selected prize may have been deleted. Refresh the page and select a new prize.',
+        hint: "The selected prize may have been deleted. Refresh the page and select a new prize.",
       });
     }
 
-    // ✅ CHECK COMPETITION TYPE EXISTS
     console.log(`🔍 Checking competition type ID: ${type_id}`);
     const [compType] = await db.query(
-      'SELECT id, name FROM competition_types WHERE id = ?',
+      "SELECT id, name FROM competition_types WHERE id = ?",
       [type_id]
     );
     console.log("🔍 Competition type result:", compType);
@@ -300,11 +372,10 @@ export const createCompetition = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: `Competition type with ID ${type_id} does not exist.`,
-        hint: 'Refresh the page and select a valid type.',
+        hint: "Refresh the page and select a valid type.",
       });
     }
 
-    // ✅ CHECK STOCK
     const winnersCount = parseInt(total_winners) || 1;
     const availableQty = procurement[0].available_quantity || 0;
     console.log(`📊 Winners: ${winnersCount}, Available: ${availableQty}`);
@@ -319,50 +390,56 @@ export const createCompetition = async (req, res) => {
       });
     }
 
-    // ✅ BUILD IMAGES
     const imageFilenames = req.files
-      ? JSON.stringify(req.files.map(f => f.filename))
+      ? JSON.stringify(req.files.map((f) => f.filename))
       : JSON.stringify([]);
 
-    // ✅ INSERT (with total_winners)
     console.log("📝 Inserting competition...");
-    const [result] = await db.query(`
+    const [result] = await db.query(
+      `
       INSERT INTO competitions 
       (title, type_id, procurement_id, description, start_date, end_date, entry_fee, total_participants, total_winners, status, images) 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      title,
-      parseInt(type_id),
-      parseInt(procurement_id),
-      description || null,
-      start_date,
-      end_date,
-      parseFloat(entry_fee),
-      parseInt(total_participants) || 100,
-      winnersCount,
-      status,
-      imageFilenames,
-    ]);
+    `,
+      [
+        title,
+        parseInt(type_id),
+        parseInt(procurement_id),
+        description || null,
+        start_date,
+        end_date,
+        parseFloat(entry_fee),
+        parseInt(total_participants) || 100,
+        winnersCount,
+        status,
+        imageFilenames,
+      ]
+    );
 
     console.log(`✅ Competition created with ID: ${result.insertId}`);
 
-    // ✅ DEDUCT STOCK
-    await db.query(`
+    await db.query(
+      `
       UPDATE procurements 
       SET available_quantity = available_quantity - ?, updated_at = NOW()
       WHERE id = ?
-    `, [winnersCount, procurement_id]);
+    `,
+      [winnersCount, procurement_id]
+    );
 
-    console.log(`✅ Deducted ${winnersCount} from procurement ${procurement_id}. Remaining: ${availableQty - winnersCount}`);
+    console.log(
+      `✅ Deducted ${winnersCount} from procurement ${procurement_id}. Remaining: ${
+        availableQty - winnersCount
+      }`
+    );
     console.log("========================================");
 
     return res.status(201).json({
       success: true,
       id: result.insertId,
-      message: 'Competition created successfully',
+      message: "Competition created successfully",
       procurement_remaining: availableQty - winnersCount,
     });
-
   } catch (err) {
     console.error("❌ ========================================");
     console.error("❌ CREATE COMPETITION ERROR");
@@ -374,30 +451,49 @@ export const createCompetition = async (req, res) => {
     console.error("Full error:", err);
     console.error("========================================");
 
-    // Return detailed error
     return res.status(500).json({
       success: false,
       message: err.sqlMessage || err.message,
       code: err.code,
-      hint: err.code === 'ER_NO_REFERENCED_ROW_2'
-        ? 'One of the foreign keys is invalid. Check type_id and procurement_id.'
-        : err.code === 'ER_BAD_NULL_ERROR'
-        ? 'A required field is null.'
-        : undefined,
+      hint:
+        err.code === "ER_NO_REFERENCED_ROW_2"
+          ? "One of the foreign keys is invalid. Check type_id and procurement_id."
+          : err.code === "ER_BAD_NULL_ERROR"
+          ? "A required field is null."
+          : undefined,
     });
   }
 };
 
 export const updateCompetition = async (req, res) => {
   const { id } = req.params;
-  const { title, type_id, procurement_id, description, start_date, end_date, entry_fee, status } = req.body;
+  const {
+    title,
+    type_id,
+    procurement_id,
+    description,
+    start_date,
+    end_date,
+    entry_fee,
+    status,
+  } = req.body;
 
   try {
     await db.query(
       `UPDATE competitions 
        SET title=?, type_id=?, procurement_id=?, description=?, start_date=?, end_date=?, entry_fee=?, status=? 
        WHERE id=?`,
-      [title, type_id, procurement_id, description, start_date, end_date, entry_fee, status, id]
+      [
+        title,
+        type_id,
+        procurement_id,
+        description,
+        start_date,
+        end_date,
+        entry_fee,
+        status,
+        id,
+      ]
     );
     res.json({ message: "Competition updated successfully" });
   } catch (err) {
@@ -419,10 +515,10 @@ export const deleteCompetition = async (req, res) => {
 
 export const getCompetitionFullDetails = async (req, res) => {
   const { id } = req.params;
-  
+
   try {
-    // 1. Get the competition details with type and procurement
-    const [comp] = await db.query(`
+    const [comp] = await db.query(
+      `
       SELECT 
         c.*,
         ct.id AS type_id,
@@ -442,10 +538,12 @@ export const getCompetitionFullDetails = async (req, res) => {
       LEFT JOIN competition_types ct ON c.type_id = ct.id
       LEFT JOIN procurements p ON c.procurement_id = p.id
       WHERE c.id = ?
-    `, [id]);
-    
-    // 2. Get all tickets with user names
-    const [tickets] = await db.query(`
+    `,
+      [id]
+    );
+
+    const [tickets] = await db.query(
+      `
       SELECT 
         t.*,
         u.name AS user_name,
@@ -455,10 +553,12 @@ export const getCompetitionFullDetails = async (req, res) => {
       JOIN users u ON t.user_id = u.id 
       WHERE t.competition_id = ? 
       ORDER BY t.created_at DESC
-    `, [id]);
+    `,
+      [id]
+    );
 
-    // 3. Check if there is a winner for this competition
-    const [winner] = await db.query(`
+    const [winner] = await db.query(
+      `
       SELECT 
         w.*,
         u.name AS user_name,
@@ -470,12 +570,14 @@ export const getCompetitionFullDetails = async (req, res) => {
       JOIN tickets t ON w.ticket_id = t.id
       WHERE w.competition_id = ? 
       LIMIT 1
-    `, [id]);
+    `,
+      [id]
+    );
 
     res.json({
       competition: comp[0],
       tickets: tickets,
-      winner: winner[0] || null
+      winner: winner[0] || null,
     });
   } catch (err) {
     console.error(err);
@@ -493,19 +595,24 @@ export const drawCompetitionWinner = async (req, res) => {
        WHERE c.id = ?`,
       [id]
     );
-    if (!comp.length) return res.status(404).json({ message: "Competition not found" });
+    if (!comp.length)
+      return res.status(404).json({ message: "Competition not found" });
 
     const [tickets] = await db.query(
       "SELECT id, ticket_number, user_id FROM tickets WHERE competition_id = ?",
       [id]
     );
     if (tickets.length === 0) {
-      return res.status(400).json({ message: "No tickets have been sold for this competition." });
+      return res
+        .status(400)
+        .json({ message: "No tickets have been sold for this competition." });
     }
 
     const winningTicket = tickets[Math.floor(Math.random() * tickets.length)];
 
-    await db.query("UPDATE tickets SET is_winner = 1 WHERE id = ?", [winningTicket.id]);
+    await db.query("UPDATE tickets SET is_winner = 1 WHERE id = ?", [
+      winningTicket.id,
+    ]);
     await db.query(
       `UPDATE competitions
        SET status = 'Closed', winner_id = ?, winning_ticket_number = ?
@@ -513,14 +620,12 @@ export const drawCompetitionWinner = async (req, res) => {
       [winningTicket.user_id, winningTicket.ticket_number, id]
     );
 
-    // ✅ Save to winners table too
     await db.query(
       `INSERT INTO winners (user_id, competition_id, ticket_id, prize_amount, status, won_at, created_at)
        VALUES (?, ?, ?, 0, 'pending', NOW(), NOW())`,
       [winningTicket.user_id, id, winningTicket.id]
     );
 
-    // ✅ Fetch all participants (for "results in" email)
     const [participants] = await db.query(
       `SELECT DISTINCT u.id, u.name, u.email
        FROM users u
@@ -529,14 +634,12 @@ export const drawCompetitionWinner = async (req, res) => {
       [id]
     );
 
-    // ✅ Fetch winner details
     const [winnerRows] = await db.query(
       "SELECT name, email FROM users WHERE id = ?",
       [winningTicket.user_id]
     );
     const winner = winnerRows[0];
 
-    // ✅ Send draw emails to everyone (winner gets a different template)
     const info = {
       title: comp[0].title,
       drawDate: new Date().toLocaleString(),
@@ -579,10 +682,10 @@ export const drawCompetitionWinner = async (req, res) => {
 
 export const getAllOrders = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
@@ -607,9 +710,12 @@ export const getAllOrders = async (req, res) => {
       ORDER BY o.created_at DESC
     `);
 
-    const orders = rows.map(order => ({
+    const orders = rows.map((order) => ({
       ...order,
-      items: typeof order.items === 'string' ? JSON.parse(order.items) : order.items
+      items:
+        typeof order.items === "string"
+          ? JSON.parse(order.items)
+          : order.items,
     }));
 
     res.status(200).json({
@@ -618,10 +724,10 @@ export const getAllOrders = async (req, res) => {
       data: orders,
     });
   } catch (err) {
-    console.error('❌ Get All Orders Error:', err);
+    console.error("❌ Get All Orders Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to retrieve orders',
+      message: "Failed to retrieve orders",
       error: err.message,
     });
   }
@@ -629,16 +735,17 @@ export const getAllOrders = async (req, res) => {
 
 export const getOrderByReference = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
     const { reference } = req.params;
 
-    const [rows] = await db.query(`
+    const [rows] = await db.query(
+      `
       SELECT 
         o.*,
         u.name AS user_name,
@@ -647,18 +754,23 @@ export const getOrderByReference = async (req, res) => {
       FROM orders o
       LEFT JOIN users u ON o.user_id = u.id
       WHERE o.reference = ?
-    `, [reference]);
+    `,
+      [reference]
+    );
 
     if (!rows.length) {
       return res.status(404).json({
         success: false,
-        message: 'Order not found',
+        message: "Order not found",
       });
     }
 
     const order = {
       ...rows[0],
-      items: typeof rows[0].items === 'string' ? JSON.parse(rows[0].items) : rows[0].items
+      items:
+        typeof rows[0].items === "string"
+          ? JSON.parse(rows[0].items)
+          : rows[0].items,
     };
 
     res.status(200).json({
@@ -666,10 +778,10 @@ export const getOrderByReference = async (req, res) => {
       data: order,
     });
   } catch (err) {
-    console.error('❌ Get Order Error:', err);
+    console.error("❌ Get Order Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to retrieve order',
+      message: "Failed to retrieve order",
       error: err.message,
     });
   }
@@ -677,21 +789,21 @@ export const getOrderByReference = async (req, res) => {
 
 export const updateOrderStatus = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
     const { reference } = req.params;
     const { status } = req.body;
 
-    const validStatuses = ['pending', 'paid', 'failed', 'refunded'];
+    const validStatuses = ["pending", "paid", "failed", "refunded"];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid status. Must be pending, paid, failed, or refunded',
+        message: "Invalid status. Must be pending, paid, failed, or refunded",
       });
     }
 
@@ -703,8 +815,60 @@ export const updateOrderStatus = async (req, res) => {
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Order not found',
+        message: "Order not found",
       });
+    }
+
+    // ✅ Send receipt + invoice when admin marks order as paid
+    if (status === "paid") {
+      try {
+        const [rows] = await db.query(
+          `SELECT o.*, u.name AS user_name, u.email AS user_email
+           FROM orders o
+           LEFT JOIN users u ON o.user_id = u.id
+           WHERE o.reference = ?`,
+          [reference]
+        );
+
+        if (rows.length && rows[0].user_email) {
+          const order = rows[0];
+          const items =
+            typeof order.items === "string"
+              ? JSON.parse(order.items)
+              : order.items || [];
+
+          const user = {
+            name: order.user_name,
+            email: order.user_email,
+          };
+
+          try {
+            await sendPaymentReceipt(user.email, user.name, {
+              reference: order.reference,
+              amount: order.total_amount,
+              method: order.payment_method || "Manual (Admin)",
+              transactionId: order.transaction_id,
+              paidAt: new Date().toLocaleString(),
+            });
+          } catch (err) {
+            console.error("⚠️ Receipt email failed:", err.message);
+          }
+
+          try {
+            await sendOrderInvoice(user.email, user.name, {
+              reference: order.reference,
+              amount: order.total_amount,
+              items,
+              status: "paid",
+              createdAt: order.created_at,
+            });
+          } catch (err) {
+            console.error("⚠️ Invoice email failed:", err.message);
+          }
+        }
+      } catch (emailErr) {
+        console.error("⚠️ Paid status emails failed:", emailErr.message);
+      }
     }
 
     res.status(200).json({
@@ -712,10 +876,10 @@ export const updateOrderStatus = async (req, res) => {
       message: `Order status updated to ${status}`,
     });
   } catch (err) {
-    console.error('❌ Update Order Status Error:', err);
+    console.error("❌ Update Order Status Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to update order status',
+      message: "Failed to update order status",
       error: err.message,
     });
   }
@@ -724,15 +888,23 @@ export const updateOrderStatus = async (req, res) => {
 export const adminCreateTickets = async (req, res) => {
   try {
     if (req.user.role !== "admin") {
-      return res.status(403).json({ success: false, message: "Only admins can create tickets manually" });
+      return res.status(403).json({
+        success: false,
+        message: "Only admins can create tickets manually",
+      });
     }
 
     const { reference } = req.body;
     if (!reference) {
-      return res.status(400).json({ success: false, message: "Reference is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Reference is required" });
     }
 
-    const [order] = await db.query(`SELECT * FROM orders WHERE reference = ?`, [reference]);
+    const [order] = await db.query(
+      `SELECT * FROM orders WHERE reference = ?`,
+      [reference]
+    );
     if (!order.length) {
       return res.status(404).json({
         success: false,
@@ -740,39 +912,62 @@ export const adminCreateTickets = async (req, res) => {
       });
     }
     if (order[0].status === "paid") {
-      return res.status(400).json({ success: false, message: "Order is already paid" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Order is already paid" });
     }
 
-    const items = typeof order[0].items === "string" ? JSON.parse(order[0].items) : order[0].items;
+    const items =
+      typeof order[0].items === "string"
+        ? JSON.parse(order[0].items)
+        : order[0].items;
 
-    await db.query(`UPDATE orders SET status = 'paid' WHERE id = ?`, [order[0].id]);
+    await db.query(`UPDATE orders SET status = 'paid' WHERE id = ?`, [
+      order[0].id,
+    ]);
 
     const createdTickets = [];
     for (const item of items) {
       const quantity = parseInt(item.quantity) || 1;
       for (let i = 0; i < quantity; i++) {
-        const ticketNumber = `TKT${Date.now()}${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        const ticketNumber = `TKT${Date.now()}${Math.random()
+          .toString(36)
+          .substring(2, 8)
+          .toUpperCase()}`;
         const [result] = await db.query(
           `INSERT INTO tickets (user_id, competition_id, order_id, ticket_number, status, created_at)
            VALUES (?, ?, ?, ?, 'active', NOW())`,
           [order[0].user_id, item.competition_id, order[0].id, ticketNumber]
         );
         createdTickets.push({
+          id: result.insertId,
           ticketNumber,
+          ticket_number: ticketNumber,
           ticket_id: item.competition_id,
-          competitionTitle: item.title || `Competition #${item.competition_id}`,
+          competition_id: item.competition_id,
+          competitionTitle:
+            item.title ||
+            item.type ||
+            `Competition #${item.competition_id}`,
         });
       }
     }
 
-    // ✅ Send tickets email
+    // ✅ Send all 3 emails (order invoice + receipt + tickets list)
     try {
-      const [u] = await db.query("SELECT name, email FROM users WHERE id = ?", [order[0].user_id]);
+      const [u] = await db.query(
+        "SELECT name, email FROM users WHERE id = ?",
+        [order[0].user_id]
+      );
       if (u.length) {
-        await sendTicketsEmail(u[0].email, u[0].name, createdTickets, reference);
+        await sendOrderEmails({
+          order: { ...order[0], status: "paid" },
+          user: u[0],
+          createdTickets,
+        });
       }
     } catch (emailErr) {
-      console.error("⚠️ Tickets email failed:", emailErr.message);
+      console.error("⚠️ Email batch failed:", emailErr.message);
     }
 
     return res.status(200).json({
@@ -798,10 +993,10 @@ export const adminCreateTickets = async (req, res) => {
 
 export const getAllTickets = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
@@ -850,7 +1045,7 @@ export const getAllTickets = async (req, res) => {
     `;
     const params = [];
 
-    if (status && status !== 'all') {
+    if (status && status !== "all") {
       query += ` AND t.status = ?`;
       params.push(status);
     }
@@ -875,10 +1070,9 @@ export const getAllTickets = async (req, res) => {
 
     const [rows] = await db.query(query, params);
 
-    // Parse JSON images safely
     const safeParse = (val, fallback = []) => {
       if (!val) return fallback;
-      if (typeof val === 'object') return val;
+      if (typeof val === "object") return val;
       try {
         const parsed = JSON.parse(val);
         return Array.isArray(parsed) ? parsed : [parsed];
@@ -887,7 +1081,7 @@ export const getAllTickets = async (req, res) => {
       }
     };
 
-    const tickets = rows.map(t => ({
+    const tickets = rows.map((t) => ({
       ...t,
       procurement_images: safeParse(t.procurement_images, []),
       is_winner: t.is_winner === 1 || t.is_winner === true,
@@ -899,31 +1093,31 @@ export const getAllTickets = async (req, res) => {
       data: tickets,
     });
   } catch (err) {
-    console.error('❌ Get All Tickets Error:', err);
+    console.error("❌ Get All Tickets Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to retrieve tickets',
+      message: "Failed to retrieve tickets",
       error: err.message,
     });
   }
 };
 
-
-// Update ticket status
 export const updateTicketStatus = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const { id } = req.params;
     const { status } = req.body;
 
-    const validStatuses = ['active', 'used', 'expired', 'pending', 'cancelled'];
+    const validStatuses = ["active", "used", "expired", "pending", "cancelled"];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
-        message: `Invalid status. Must be one of: ${validStatuses.join(', ')}`,
+        message: `Invalid status. Must be one of: ${validStatuses.join(", ")}`,
       });
     }
 
@@ -933,7 +1127,9 @@ export const updateTicketStatus = async (req, res) => {
     );
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: 'Ticket not found' });
+      return res
+        .status(404)
+        .json({ success: false, message: "Ticket not found" });
     }
 
     res.json({
@@ -941,30 +1137,35 @@ export const updateTicketStatus = async (req, res) => {
       message: `Ticket status updated to ${status}`,
     });
   } catch (err) {
-    console.error('❌ Update Ticket Status Error:', err);
+    console.error("❌ Update Ticket Status Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-// Bulk update ticket status
 export const bulkUpdateTicketStatus = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const { ticketIds, status } = req.body;
 
     if (!Array.isArray(ticketIds) || ticketIds.length === 0) {
-      return res.status(400).json({ success: false, message: 'No tickets selected' });
+      return res
+        .status(400)
+        .json({ success: false, message: "No tickets selected" });
     }
 
-    const validStatuses = ['active', 'used', 'expired', 'pending', 'cancelled'];
+    const validStatuses = ["active", "used", "expired", "pending", "cancelled"];
     if (!validStatuses.includes(status)) {
-      return res.status(400).json({ success: false, message: 'Invalid status' });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid status" });
     }
 
-    const placeholders = ticketIds.map(() => '?').join(',');
+    const placeholders = ticketIds.map(() => "?").join(",");
     const [result] = await db.query(
       `UPDATE tickets SET status = ?, updated_at = NOW() WHERE id IN (${placeholders})`,
       [status, ...ticketIds]
@@ -976,15 +1177,17 @@ export const bulkUpdateTicketStatus = async (req, res) => {
       updated: result.affectedRows,
     });
   } catch (err) {
-    console.error('❌ Bulk Update Error:', err);
+    console.error("❌ Bulk Update Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
-// Delete ticket
+
 export const deleteTicket = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const { id } = req.params;
@@ -992,21 +1195,24 @@ export const deleteTicket = async (req, res) => {
     const [result] = await db.query(`DELETE FROM tickets WHERE id = ?`, [id]);
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: 'Ticket not found' });
+      return res
+        .status(404)
+        .json({ success: false, message: "Ticket not found" });
     }
 
-    res.json({ success: true, message: 'Ticket deleted successfully' });
+    res.json({ success: true, message: "Ticket deleted successfully" });
   } catch (err) {
-    console.error('❌ Delete Ticket Error:', err);
+    console.error("❌ Delete Ticket Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-// Get ticket statistics
 export const getTicketStats = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const [stats] = await db.query(`
@@ -1055,20 +1261,20 @@ export const getTicketStats = async (req, res) => {
         overall: stats[0],
         by_type: byType,
         recent: recentTickets,
-      }
+      },
     });
   } catch (err) {
-    console.error('❌ Get Ticket Stats Error:', err);
+    console.error("❌ Get Ticket Stats Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-
-// Export tickets (CSV)
 export const exportTickets = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const [rows] = await db.query(`
@@ -1090,32 +1296,45 @@ export const exportTickets = async (req, res) => {
       ORDER BY t.created_at DESC
     `);
 
-    // Build CSV
     const headers = [
-      'Ticket Number', 'Status', 'Winner', 'User Name', 'User Email',
-      'User Phone', 'Competition', 'Order Reference', 'Order Amount', 'Created At'
+      "Ticket Number",
+      "Status",
+      "Winner",
+      "User Name",
+      "User Email",
+      "User Phone",
+      "Competition",
+      "Order Reference",
+      "Order Amount",
+      "Created At",
     ];
-    const rowsCsv = rows.map(r => [
+    const rowsCsv = rows.map((r) => [
       r.ticket_number,
       r.status,
-      r.is_winner ? 'YES' : 'NO',
-      r.user_name || '',
-      r.user_email || '',
-      r.user_phone || '',
-      r.competition_name || '',
-      r.order_reference || '',
+      r.is_winner ? "YES" : "NO",
+      r.user_name || "",
+      r.user_email || "",
+      r.user_phone || "",
+      r.competition_name || "",
+      r.order_reference || "",
       r.order_amount || 0,
-      r.created_at ? new Date(r.created_at).toISOString() : '',
+      r.created_at ? new Date(r.created_at).toISOString() : "",
     ]);
 
     const escape = (val) => `"${String(val).replace(/"/g, '""')}"`;
-    const csv = [headers.map(escape).join(','), ...rowsCsv.map(row => row.map(escape).join(','))].join('\n');
+    const csv = [
+      headers.map(escape).join(","),
+      ...rowsCsv.map((row) => row.map(escape).join(",")),
+    ].join("\n");
 
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename=tickets-${Date.now()}.csv`);
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=tickets-${Date.now()}.csv`
+    );
     res.send(csv);
   } catch (err) {
-    console.error('❌ Export Error:', err);
+    console.error("❌ Export Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -1126,10 +1345,10 @@ export const exportTickets = async (req, res) => {
 
 export const getAllWinners = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
@@ -1171,24 +1390,27 @@ export const getAllWinners = async (req, res) => {
       data: rows,
     });
   } catch (err) {
-    console.error('❌ Get All Winners Error:', err);
+    console.error("❌ Get All Winners Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to retrieve winners',
+      message: "Failed to retrieve winners",
       error: err.message,
     });
   }
 };
-// Get single ticket details
+
 export const getTicketById = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const { id } = req.params;
 
-    const [rows] = await db.query(`
+    const [rows] = await db.query(
+      `
       SELECT 
         t.*,
         u.name AS user_name,
@@ -1221,15 +1443,19 @@ export const getTicketById = async (req, res) => {
       LEFT JOIN procurements p ON c.procurement_id = p.id
       LEFT JOIN orders o ON t.order_id = o.id
       WHERE t.id = ?
-    `, [id]);
+    `,
+      [id]
+    );
 
     if (!rows.length) {
-      return res.status(404).json({ success: false, message: 'Ticket not found' });
+      return res
+        .status(404)
+        .json({ success: false, message: "Ticket not found" });
     }
 
     const safeParse = (val, fallback = []) => {
       if (!val) return fallback;
-      if (typeof val === 'object') return val;
+      if (typeof val === "object") return val;
       try {
         const parsed = JSON.parse(val);
         return Array.isArray(parsed) ? parsed : [parsed];
@@ -1244,16 +1470,17 @@ export const getTicketById = async (req, res) => {
 
     res.json({ success: true, data: ticket });
   } catch (err) {
-    console.error('❌ Get Ticket Error:', err);
+    console.error("❌ Get Ticket Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-
 export const declareWinner = async (req, res) => {
   try {
     if (req.user.role !== "admin") {
-      return res.status(403).json({ success: false, message: "Access denied. Admin only." });
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const { competitionId, ticketNumber, prizeAmount } = req.body;
@@ -1297,7 +1524,7 @@ export const declareWinner = async (req, res) => {
       [ticket[0].user_id, ticketNumber, competitionId]
     );
 
-    // ✅ Send winner email
+    // ✅ Notify everyone: winner gets winning template, others get results template
     try {
       const [winnerUser] = await db.query(
         "SELECT name, email FROM users WHERE id = ?",
@@ -1311,18 +1538,34 @@ export const declareWinner = async (req, res) => {
         [competitionId]
       );
 
-      if (winnerUser.length) {
-        await sendDrawNotification(winnerUser[0].email, winnerUser[0].name, {
-          title: comp[0]?.title || "Competition",
-          drawDate: new Date().toLocaleString(),
-          prizeName: comp[0]?.prize_name || "the prize",
-          winnerName: winnerUser[0].name,
-          isWinner: true,
-          resultsUrl: `https://www.keboka.com/winners`,
-        });
+      const [participants] = await db.query(
+        `SELECT DISTINCT u.id, u.name, u.email
+         FROM users u
+         JOIN tickets t ON t.user_id = u.id
+         WHERE t.competition_id = ?`,
+        [competitionId]
+      );
+
+      const info = {
+        title: comp[0]?.title || "Competition",
+        drawDate: new Date().toLocaleString(),
+        prizeName: comp[0]?.prize_name || "the prize",
+        winnerName: winnerUser[0]?.name || "See live draw",
+        resultsUrl: `https://www.keboka.com/winners`,
+      };
+
+      for (const p of participants) {
+        try {
+          await sendDrawNotification(p.email, p.name, {
+            ...info,
+            isWinner: p.id === ticket[0].user_id,
+          });
+        } catch (err) {
+          console.error(`⚠️ Draw email failed for ${p.email}:`, err.message);
+        }
       }
     } catch (emailErr) {
-      console.error("⚠️ Winner email failed:", emailErr.message);
+      console.error("⚠️ Winner email batch failed:", emailErr.message);
     }
 
     return res.status(200).json({
@@ -1349,31 +1592,28 @@ export const declareWinner = async (req, res) => {
 
 export const payWinner = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
     const { id } = req.params;
 
-    const [winner] = await db.query(
-      `SELECT * FROM winners WHERE id = ?`,
-      [id]
-    );
+    const [winner] = await db.query(`SELECT * FROM winners WHERE id = ?`, [id]);
 
     if (!winner.length) {
       return res.status(404).json({
         success: false,
-        message: 'Winner not found',
+        message: "Winner not found",
       });
     }
 
-    if (winner[0].status === 'paid') {
+    if (winner[0].status === "paid") {
       return res.status(400).json({
         success: false,
-        message: 'Winner already paid',
+        message: "Winner already paid",
       });
     }
 
@@ -1382,15 +1622,35 @@ export const payWinner = async (req, res) => {
       [id]
     );
 
+    // ✅ Send payout confirmation email to winner
+    try {
+      const [u] = await db.query(
+        "SELECT name, email FROM users WHERE id = ?",
+        [winner[0].user_id]
+      );
+
+      if (u.length) {
+        await sendPaymentReceipt(u[0].email, u[0].name, {
+          reference: `WIN-${winner[0].id}`,
+          amount: winner[0].prize_amount || 0,
+          method: "Prize Payout",
+          transactionId: `PAYOUT-${winner[0].id}`,
+          paidAt: new Date().toLocaleString(),
+        });
+      }
+    } catch (emailErr) {
+      console.error("⚠️ Winner payout email failed:", emailErr.message);
+    }
+
     res.status(200).json({
       success: true,
-      message: 'Winner paid successfully!',
+      message: "Winner paid successfully!",
     });
   } catch (err) {
-    console.error('❌ Pay Winner Error:', err);
+    console.error("❌ Pay Winner Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to process payment',
+      message: "Failed to process payment",
       error: err.message,
     });
   }
@@ -1402,10 +1662,10 @@ export const payWinner = async (req, res) => {
 
 export const getAllPayouts = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
@@ -1436,10 +1696,10 @@ export const getAllPayouts = async (req, res) => {
       data: rows,
     });
   } catch (err) {
-    console.error('❌ Get All Payouts Error:', err);
+    console.error("❌ Get All Payouts Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to retrieve payouts',
+      message: "Failed to retrieve payouts",
       error: err.message,
     });
   }
@@ -1447,31 +1707,28 @@ export const getAllPayouts = async (req, res) => {
 
 export const processPayout = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
     const { id } = req.params;
 
-    const [payout] = await db.query(
-      `SELECT * FROM payouts WHERE id = ?`,
-      [id]
-    );
+    const [payout] = await db.query(`SELECT * FROM payouts WHERE id = ?`, [id]);
 
     if (!payout.length) {
       return res.status(404).json({
         success: false,
-        message: 'Payout not found',
+        message: "Payout not found",
       });
     }
 
-    if (payout[0].status === 'completed') {
+    if (payout[0].status === "completed") {
       return res.status(400).json({
         success: false,
-        message: 'Payout already completed',
+        message: "Payout already completed",
       });
     }
 
@@ -1480,15 +1737,35 @@ export const processPayout = async (req, res) => {
       [id]
     );
 
+    // ✅ Send payout confirmation
+    try {
+      const [u] = await db.query(
+        "SELECT name, email FROM users WHERE id = ?",
+        [payout[0].user_id]
+      );
+
+      if (u.length) {
+        await sendPaymentReceipt(u[0].email, u[0].name, {
+          reference: payout[0].reference,
+          amount: payout[0].amount,
+          method: "Payout",
+          transactionId: payout[0].reference,
+          paidAt: new Date().toLocaleString(),
+        });
+      }
+    } catch (emailErr) {
+      console.error("⚠️ Payout email failed:", emailErr.message);
+    }
+
     res.status(200).json({
       success: true,
-      message: 'Payout processed successfully!',
+      message: "Payout processed successfully!",
     });
   } catch (err) {
-    console.error('❌ Process Payout Error:', err);
+    console.error("❌ Process Payout Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to process payout',
+      message: "Failed to process payout",
       error: err.message,
     });
   }
@@ -1496,10 +1773,10 @@ export const processPayout = async (req, res) => {
 
 export const createPayout = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
@@ -1508,31 +1785,34 @@ export const createPayout = async (req, res) => {
     if (!userId || !amount || !bankCode || !accountNumber || !accountName) {
       return res.status(400).json({
         success: false,
-        message: 'All fields are required',
+        message: "All fields are required",
       });
     }
 
-    const reference = `PO${Date.now()}${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const reference = `PO${Date.now()}${Math.random()
+      .toString(36)
+      .substring(2, 8)
+      .toUpperCase()}`;
 
     const [result] = await db.query(
       `INSERT INTO payouts (user_id, reference, amount, bank_code, account_number, account_name, status, created_at) 
        VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [userId, reference, amount, bankCode, accountNumber, accountName, 'pending']
+      [userId, reference, amount, bankCode, accountNumber, accountName, "pending"]
     );
 
     res.status(200).json({
       success: true,
-      message: 'Payout created successfully!',
+      message: "Payout created successfully!",
       data: {
         id: result.insertId,
         reference: reference,
       },
     });
   } catch (err) {
-    console.error('❌ Create Payout Error:', err);
+    console.error("❌ Create Payout Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to create payout',
+      message: "Failed to create payout",
       error: err.message,
     });
   }
@@ -1544,24 +1824,24 @@ export const createPayout = async (req, res) => {
 
 export const getSalesReport = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
-    const { period = 'month' } = req.query;
+    const { period = "month" } = req.query;
 
-    let dateCondition = '';
-    if (period === 'today') {
-      dateCondition = 'DATE(created_at) = CURDATE()';
-    } else if (period === 'week') {
-      dateCondition = 'created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)';
-    } else if (period === 'month') {
-      dateCondition = 'created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)';
-    } else if (period === 'year') {
-      dateCondition = 'created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)';
+    let dateCondition = "";
+    if (period === "today") {
+      dateCondition = "DATE(created_at) = CURDATE()";
+    } else if (period === "week") {
+      dateCondition = "created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+    } else if (period === "month") {
+      dateCondition = "created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)";
+    } else if (period === "year") {
+      dateCondition = "created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
     }
 
     const [orders] = await db.query(`
@@ -1596,10 +1876,10 @@ export const getSalesReport = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('❌ Get Sales Report Error:', err);
+    console.error("❌ Get Sales Report Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to generate report',
+      message: "Failed to generate report",
       error: err.message,
     });
   }
@@ -1607,10 +1887,10 @@ export const getSalesReport = async (req, res) => {
 
 export const getCompetitionReport = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
@@ -1649,10 +1929,10 @@ export const getCompetitionReport = async (req, res) => {
       data: competitions,
     });
   } catch (err) {
-    console.error('❌ Get Competition Report Error:', err);
+    console.error("❌ Get Competition Report Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to generate competition report',
+      message: "Failed to generate competition report",
       error: err.message,
     });
   }
@@ -1664,10 +1944,10 @@ export const getCompetitionReport = async (req, res) => {
 
 export const getSchedule = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
@@ -1707,10 +1987,10 @@ export const getSchedule = async (req, res) => {
       data: rows,
     });
   } catch (err) {
-    console.error('❌ Get Schedule Error:', err);
+    console.error("❌ Get Schedule Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to retrieve schedule',
+      message: "Failed to retrieve schedule",
       error: err.message,
     });
   }
@@ -1722,8 +2002,10 @@ export const getSchedule = async (req, res) => {
 
 export const getAllUsers = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const { search, status } = req.query;
@@ -1759,9 +2041,9 @@ export const getAllUsers = async (req, res) => {
       params.push(s, s, s);
     }
 
-    if (status === 'student') {
+    if (status === "student") {
       query += ` AND u.isStudent = 'yes'`;
-    } else if (status === 'non-student') {
+    } else if (status === "non-student") {
       query += ` AND u.isStudent = 'no'`;
     }
 
@@ -1775,20 +2057,23 @@ export const getAllUsers = async (req, res) => {
       data: rows,
     });
   } catch (err) {
-    console.error('❌ Get All Users Error:', err);
+    console.error("❌ Get All Users Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
-// Get single user with full details
+
 export const getUserById = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const { id } = req.params;
 
-    const [user] = await db.query(`
+    const [user] = await db.query(
+      `
       SELECT 
         u.Id AS id,
         u.name,
@@ -1807,14 +2092,18 @@ export const getUserById = async (req, res) => {
         u.updated_at
       FROM users u
       WHERE u.Id = ?
-    `, [id]);
+    `,
+      [id]
+    );
 
     if (!user.length) {
-      return res.status(404).json({ success: false, message: 'User not found' });
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
     }
 
-    // Get user's tickets
-    const [tickets] = await db.query(`
+    const [tickets] = await db.query(
+      `
       SELECT 
         t.id,
         t.ticket_number,
@@ -1829,10 +2118,12 @@ export const getUserById = async (req, res) => {
       WHERE t.user_id = ?
       ORDER BY t.created_at DESC
       LIMIT 20
-    `, [id]);
+    `,
+      [id]
+    );
 
-    // Get user's orders
-    const [orders] = await db.query(`
+    const [orders] = await db.query(
+      `
       SELECT 
         o.id,
         o.reference,
@@ -1844,10 +2135,12 @@ export const getUserById = async (req, res) => {
       WHERE o.user_id = ?
       ORDER BY o.created_at DESC
       LIMIT 20
-    `, [id]);
+    `,
+      [id]
+    );
 
-    // Get user's wins
-    const [wins] = await db.query(`
+    const [wins] = await db.query(
+      `
       SELECT 
         w.id,
         w.prize_amount,
@@ -1860,16 +2153,20 @@ export const getUserById = async (req, res) => {
       LEFT JOIN tickets t ON w.ticket_id = t.id
       WHERE w.user_id = ?
       ORDER BY w.won_at DESC
-    `, [id]);
+    `,
+      [id]
+    );
 
-    // Get stats
-    const [stats] = await db.query(`
+    const [stats] = await db.query(
+      `
       SELECT 
         (SELECT COUNT(*) FROM tickets WHERE user_id = ?) AS total_tickets,
         (SELECT COUNT(*) FROM winners WHERE user_id = ?) AS total_wins,
         (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE user_id = ? AND status = 'paid') AS total_spent,
         (SELECT COUNT(*) FROM orders WHERE user_id = ?) AS total_orders
-    `, [id, id, id, id]);
+    `,
+      [id, id, id, id]
+    );
 
     res.json({
       success: true,
@@ -1882,27 +2179,30 @@ export const getUserById = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('❌ Get User Error:', err);
+    console.error("❌ Get User Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
 export const updateUserRole = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const { id } = req.params;
     const { role } = req.body;
 
-    const validRoles = ['user', 'admin', 'moderator'];
+    const validRoles = ["user", "admin", "moderator"];
     if (!validRoles.includes(role)) {
-      return res.status(400).json({ success: false, message: 'Invalid role' });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid role" });
     }
 
-    // Prevent removing the last admin
-    if (role !== 'admin') {
+    if (role !== "admin") {
       const [admins] = await db.query(
         "SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND Id != ?",
         [id]
@@ -1910,46 +2210,64 @@ export const updateUserRole = async (req, res) => {
       if (admins[0].count === 0) {
         return res.status(400).json({
           success: false,
-          message: 'Cannot remove the last admin account',
+          message: "Cannot remove the last admin account",
         });
       }
     }
 
-    await db.query(
-      `UPDATE users SET role = ?, updated_at = NOW() WHERE Id = ?`,
-      [role, id]
-    );
+    await db.query(`UPDATE users SET role = ?, updated_at = NOW() WHERE Id = ?`, [
+      role,
+      id,
+    ]);
 
     res.json({
       success: true,
       message: `User role updated to ${role}`,
     });
   } catch (err) {
-    console.error('❌ Update User Role Error:', err);
+    console.error("❌ Update User Role Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-// Update user details (admin can edit)
-
 export const updateUser = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const { id } = req.params;
     const {
-      name, phone, state, lga, city, isStudent, occupation,
-      schoolName, department, account_number, bank_name
+      name,
+      phone,
+      state,
+      lga,
+      city,
+      isStudent,
+      occupation,
+      schoolName,
+      department,
+      account_number,
+      bank_name,
     } = req.body;
 
     const updates = [];
     const values = [];
 
     const fields = {
-      name, phone, state, lga, city, isStudent, occupation,
-      schoolName, department, account_number, bank_name
+      name,
+      phone,
+      state,
+      lga,
+      city,
+      isStudent,
+      occupation,
+      schoolName,
+      department,
+      account_number,
+      bank_name,
     };
 
     for (const [key, val] of Object.entries(fields)) {
@@ -1960,50 +2278,56 @@ export const updateUser = async (req, res) => {
     }
 
     if (updates.length === 0) {
-      return res.status(400).json({ success: false, message: 'No fields to update' });
+      return res
+        .status(400)
+        .json({ success: false, message: "No fields to update" });
     }
 
     values.push(id);
 
     await db.query(
-      `UPDATE users SET ${updates.join(', ')}, updated_at = NOW() WHERE Id = ?`,
+      `UPDATE users SET ${updates.join(", ")}, updated_at = NOW() WHERE Id = ?`,
       values
     );
 
-    res.json({ success: true, message: 'User updated successfully' });
+    res.json({ success: true, message: "User updated successfully" });
   } catch (err) {
-    console.error('❌ Update User Error:', err);
+    console.error("❌ Update User Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-// Delete user
 export const deleteUser = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const { id } = req.params;
 
-    const [result] = await db.query('DELETE FROM users WHERE Id = ?', [id]);
+    const [result] = await db.query("DELETE FROM users WHERE Id = ?", [id]);
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: 'User not found' });
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
     }
 
-    res.json({ success: true, message: 'User deleted successfully' });
+    res.json({ success: true, message: "User deleted successfully" });
   } catch (err) {
-    console.error('❌ Delete User Error:', err);
+    console.error("❌ Delete User Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-// Get user statistics
 export const getUserStats = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const [stats] = await db.query(`
@@ -2016,7 +2340,6 @@ export const getUserStats = async (req, res) => {
       FROM users
     `);
 
-    // Get admin count from adminlog table
     const [adminStats] = await db.query(`
       SELECT COUNT(*) AS total_admins FROM adminlog
     `);
@@ -2040,16 +2363,17 @@ export const getUserStats = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('❌ Get User Stats Error:', err);
+    console.error("❌ Get User Stats Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-// Export users CSV
 export const exportUsers = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
+    if (req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied. Admin only." });
     }
 
     const [rows] = await db.query(`
@@ -2061,28 +2385,54 @@ export const exportUsers = async (req, res) => {
     `);
 
     const headers = [
-      'ID', 'Name', 'Email', 'Phone', 'Student', 'State', 'LGA',
-      'City', 'Occupation', 'School', 'Department', 'Bank', 'Account Number', 'Created At'
+      "ID",
+      "Name",
+      "Email",
+      "Phone",
+      "Student",
+      "State",
+      "LGA",
+      "City",
+      "Occupation",
+      "School",
+      "Department",
+      "Bank",
+      "Account Number",
+      "Created At",
     ];
 
-    const escape = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
+    const escape = (val) => `"${String(val ?? "").replace(/"/g, '""')}"`;
 
-    const csvRows = rows.map(r => [
-      r.id, r.name, r.email, r.phone, r.isStudent, r.state, r.lga,
-      r.city, r.occupation, r.schoolName, r.department, r.bank_name,
-      r.account_number, r.created_at ? new Date(r.created_at).toISOString() : '',
+    const csvRows = rows.map((r) => [
+      r.id,
+      r.name,
+      r.email,
+      r.phone,
+      r.isStudent,
+      r.state,
+      r.lga,
+      r.city,
+      r.occupation,
+      r.schoolName,
+      r.department,
+      r.bank_name,
+      r.account_number,
+      r.created_at ? new Date(r.created_at).toISOString() : "",
     ]);
 
     const csv = [
-      headers.map(escape).join(','),
-      ...csvRows.map(r => r.map(escape).join(',')),
-    ].join('\n');
+      headers.map(escape).join(","),
+      ...csvRows.map((r) => r.map(escape).join(",")),
+    ].join("\n");
 
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename=users-${Date.now()}.csv`);
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=users-${Date.now()}.csv`
+    );
     res.send(csv);
   } catch (err) {
-    console.error('❌ Export Users Error:', err);
+    console.error("❌ Export Users Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -2093,19 +2443,31 @@ export const exportUsers = async (req, res) => {
 
 export const getDashboardStats = async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Admin only.',
+        message: "Access denied. Admin only.",
       });
     }
 
-    const [totalUsers] = await db.query("SELECT COUNT(*) as count FROM users");
-    const [totalOrders] = await db.query("SELECT COUNT(*) as count, SUM(total_amount) as total_revenue FROM orders WHERE status = 'paid'");
-    const [totalTickets] = await db.query("SELECT COUNT(*) as count FROM tickets");
-    const [totalCompetitions] = await db.query("SELECT COUNT(*) as count FROM competitions");
-    const [pendingOrders] = await db.query("SELECT COUNT(*) as count FROM orders WHERE status = 'pending'");
-    const [recentOrders] = await db.query("SELECT * FROM orders ORDER BY created_at DESC LIMIT 5");
+    const [totalUsers] = await db.query(
+      "SELECT COUNT(*) as count FROM users"
+    );
+    const [totalOrders] = await db.query(
+      "SELECT COUNT(*) as count, SUM(total_amount) as total_revenue FROM orders WHERE status = 'paid'"
+    );
+    const [totalTickets] = await db.query(
+      "SELECT COUNT(*) as count FROM tickets"
+    );
+    const [totalCompetitions] = await db.query(
+      "SELECT COUNT(*) as count FROM competitions"
+    );
+    const [pendingOrders] = await db.query(
+      "SELECT COUNT(*) as count FROM orders WHERE status = 'pending'"
+    );
+    const [recentOrders] = await db.query(
+      "SELECT * FROM orders ORDER BY created_at DESC LIMIT 5"
+    );
 
     res.status(200).json({
       success: true,
@@ -2117,13 +2479,13 @@ export const getDashboardStats = async (req, res) => {
         totalCompetitions: totalCompetitions[0].count,
         pendingOrders: pendingOrders[0].count,
         recentOrders: recentOrders,
-      }
+      },
     });
   } catch (err) {
-    console.error('❌ Get Dashboard Stats Error:', err);
+    console.error("❌ Get Dashboard Stats Error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to retrieve dashboard stats',
+      message: "Failed to retrieve dashboard stats",
       error: err.message,
     });
   }
