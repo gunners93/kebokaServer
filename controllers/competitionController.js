@@ -3,7 +3,7 @@ import db from '../config/db.js';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-
+import { sendDrawNotification } from "../services/email.service.js";
 // ============================================
 // HELPER: Safe JSON Parse
 // ============================================
@@ -721,9 +721,10 @@ export const getCompetitionFullDetails = async (req, res) => {
 };
 
 // Draw winner(s) - One at a time, no duplicates
+// Draw winner(s) - One at a time, no duplicates
 export const drawCompetitionWinner = async (req, res) => {
   const connection = await db.getConnection();
-  
+
   try {
     await connection.beginTransaction();
 
@@ -755,7 +756,8 @@ export const drawCompetitionWinner = async (req, res) => {
     }
 
     // Get all tickets that haven't won yet (no duplicate winners)
-    const [availableTickets] = await connection.query(`
+    const [availableTickets] = await connection.query(
+      `
       SELECT t.id, t.ticket_number, t.user_id
       FROM tickets t
       WHERE t.competition_id = ?
@@ -765,7 +767,9 @@ export const drawCompetitionWinner = async (req, res) => {
           FROM winners w 
           WHERE w.competition_id = ?
         )
-    `, [id, id]);
+    `,
+      [id, id]
+    );
 
     if (availableTickets.length === 0) {
       await connection.rollback();
@@ -785,10 +789,13 @@ export const drawCompetitionWinner = async (req, res) => {
     );
 
     // Create winner record
-    await connection.query(`
+    await connection.query(
+      `
       INSERT INTO winners (user_id, competition_id, ticket_id, status, won_at, created_at) 
       VALUES (?, ?, ?, 'pending', NOW(), NOW())
-    `, [winningTicket.user_id, id, winningTicket.id]);
+    `,
+      [winningTicket.user_id, id, winningTicket.id]
+    );
 
     // Update winners_drawn count
     const newWinnersDrawn = winnersDrawn + 1;
@@ -811,11 +818,74 @@ export const drawCompetitionWinner = async (req, res) => {
       [winningTicket.user_id]
     );
 
+    // ✅ Fetch prize name for the email (from first linked prize)
+    const [prizeRows] = await connection.query(
+      `SELECT p.title AS prize_name
+       FROM competition_prizes cp
+       JOIN procurements p ON cp.procurement_id = p.id
+       WHERE cp.competition_id = ?
+       ORDER BY cp.id ASC
+       LIMIT 1`,
+      [id]
+    );
+
+    const prizeName =
+      prizeRows[0]?.prize_name ||
+      competition.title ||
+      'the prize';
+
+    // ✅ Commit DB transaction BEFORE sending emails
+    //    (so slow SMTP never blocks the lock)
     await connection.commit();
 
-    console.log(`🎉 Winner ${newWinnersDrawn}/${totalWinners} drawn for competition ${id}`);
+    console.log(
+      `🎉 Winner ${newWinnersDrawn}/${totalWinners} drawn for competition ${id}`
+    );
 
-    res.json({
+    // ============================================
+    // ✅ EMAIL NOTIFICATIONS (non-blocking)
+    // ============================================
+    // Run AFTER commit so email failures don't rollback the draw.
+    try {
+      // Fetch all unique participants (for "results in" email)
+      const [participants] = await db.query(
+        `SELECT DISTINCT u.Id AS id, u.name, u.email
+         FROM users u
+         JOIN tickets t ON t.user_id = u.Id
+         WHERE t.competition_id = ?`,
+        [id]
+      );
+
+      const winner = winnerDetails[0] || null;
+
+      const info = {
+        title: competition.title || 'Competition',
+        drawDate: new Date().toLocaleString(),
+        prizeName,
+        winnerName: winner?.name || 'See live draw',
+        resultsUrl: 'https://www.keboka.com/winners',
+      };
+
+      for (const p of participants) {
+        try {
+          await sendDrawNotification(p.email, p.name, {
+            ...info,
+            // Only the actual winner gets the "You won!" template
+            isWinner: p.id === winningTicket.user_id,
+          });
+        } catch (err) {
+          console.error(`⚠️ Draw email failed for ${p.email}:`, err.message);
+        }
+      }
+
+      console.log(
+        `📧 Draw notification sent to ${participants.length} participant(s)`
+      );
+    } catch (emailErr) {
+      console.error('⚠️ Draw email batch failed:', emailErr.message);
+    }
+
+    return res.json({
       success: true,
       message: `Winner ${newWinnersDrawn}/${totalWinners} drawn successfully!`,
       winner: {
