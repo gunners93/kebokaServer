@@ -1095,3 +1095,212 @@ export const getCompetitionWinners = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+
+
+export const getWinnerDetails = async (req, res) => {
+  try {
+    const { competitionId } = req.params;
+
+    // 1. Competition + type + procurement
+    const [compRows] = await db.query(
+      `SELECT 
+        c.*,
+        c.title AS competition_title,
+        c.id AS competition_id,
+        ct.id AS type_id,
+        ct.name AS competition_type_name,
+        ct.type_name AS competition_type,
+        ct.bgcolor AS competition_color,
+        ct.img AS competition_type_image,
+        ct.tag AS competition_tag,
+        p.title AS procurement_title,
+        p.value AS procurement_value,
+        p.images AS procurement_images,
+        p.description AS procurement_description
+      FROM competitions c
+      LEFT JOIN competition_types ct ON c.type_id = ct.id
+      LEFT JOIN procurements p ON c.procurement_id = p.id
+      WHERE c.id = ?`,
+      [competitionId]
+    );
+
+    if (!compRows.length) {
+      return res.status(404).json({ success: false, message: "Competition not found" });
+    }
+
+    const competition = compRows[0];
+
+    // 2. All winners (joined with user + ticket)
+    const [winnerRows] = await db.query(
+      `SELECT 
+        w.id AS winner_id,
+        w.user_id,
+        w.competition_id,
+        w.ticket_id,
+        w.prize_amount,
+        w.status AS winner_status,
+        w.won_at,
+        u.name,
+        u.email,
+        u.phone,
+        u.state,
+        u.lga,
+        u.city,
+        u.schoolName,
+        u.department,
+        u.isStudent,
+        t.ticket_number,
+        t.id AS ticket_id
+      FROM winners w
+      JOIN users u ON u.Id = w.user_id
+      LEFT JOIN tickets t ON t.id = w.ticket_id
+      WHERE w.competition_id = ?
+      ORDER BY w.won_at ASC`,
+      [competitionId]
+    );
+
+    // 3. All participants (for Supabol/Komon split calculations)
+    const [participants] = await db.query(
+      `SELECT 
+        u.Id AS user_id,
+        u.name,
+        u.email,
+        u.state,
+        u.lga,
+        u.schoolName,
+        t.id AS ticket_id,
+        t.ticket_number
+      FROM tickets t
+      JOIN users u ON u.Id = t.user_id
+      WHERE t.competition_id = ?
+      GROUP BY t.user_id`,
+      [competitionId]
+    );
+
+    // 4. Total tickets sold
+    const [ticketCountRows] = await db.query(
+      `SELECT COUNT(*) AS total_tickets FROM tickets WHERE competition_id = ?`,
+      [competitionId]
+    );
+    const totalTickets = ticketCountRows[0]?.total_tickets || 0;
+
+    // 5. Parse images
+    const safeParse = (val, fallback = []) => {
+      if (!val) return fallback;
+      if (Array.isArray(val)) return val;
+      if (typeof val === "object") return val;
+      try {
+        const parsed = JSON.parse(val);
+        return Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        return [val];
+      }
+    };
+
+    const prizeImages = safeParse(competition.procurement_images, []);
+    const competitionImages = safeParse(competition.images, []);
+
+    // 6. Compute split-specific data based on type
+    const typeName = (competition.competition_type || "").toUpperCase();
+    const prizeValue = Number(competition.procurement_value) || 0;
+
+    let splitInfo = null;
+
+    if (typeName === "SUPABOL" && winnerRows.length > 0) {
+      // Supabol: winner gets 20%, participants in same school share 80%
+      const winner = winnerRows[0];
+      const sameSchoolParticipants = participants.filter(
+        (p) =>
+          p.schoolName &&
+          winner.schoolName &&
+          p.schoolName.toLowerCase() === winner.schoolName.toLowerCase() &&
+          p.user_id !== winner.user_id
+      );
+
+      const winnerShare = prizeValue * 0.20;
+      const sharedPool = prizeValue * 0.80;
+      const perParticipant =
+        sameSchoolParticipants.length > 0
+          ? sharedPool / sameSchoolParticipants.length
+          : 0;
+
+      splitInfo = {
+        type: "supabol",
+        winnerShare,
+        sharedPool,
+        totalParticipants: sameSchoolParticipants.length,
+        perParticipant,
+        schoolName: winner.schoolName,
+        participants: sameSchoolParticipants.map((p) => ({
+          name: p.name,
+          ticket_number: p.ticket_number,
+          schoolName: p.schoolName,
+        })),
+      };
+    }
+
+    if (typeName === "KOMONWEALTH" && winnerRows.length > 0) {
+      // Komon Wealth: winner gets 10%, LGA participants share 90%
+      const winner = winnerRows[0];
+      const sameLgaParticipants = participants.filter(
+        (p) =>
+          p.lga &&
+          winner.lga &&
+          p.lga.toLowerCase() === winner.lga.toLowerCase() &&
+          p.user_id !== winner.user_id
+      );
+
+      const winnerShare = prizeValue * 0.10;
+      const sharedPool = prizeValue * 0.90;
+      const perParticipant =
+        sameLgaParticipants.length > 0
+          ? sharedPool / sameLgaParticipants.length
+          : 0;
+
+      splitInfo = {
+        type: "komonwealth",
+        winnerShare,
+        sharedPool,
+        totalParticipants: sameLgaParticipants.length,
+        perParticipant,
+        lga: winner.lga,
+        state: winner.state,
+        participants: sameLgaParticipants.map((p) => ({
+          name: p.name,
+          ticket_number: p.ticket_number,
+          lga: p.lga,
+          state: p.state,
+        })),
+      };
+    }
+
+    // 7. Send response
+    return res.json({
+      success: true,
+      data: {
+        competition: {
+          ...competition,
+          images: competitionImages,
+          procurement_images: prizeImages,
+        },
+        winners: winnerRows.map((w) => ({
+          ...w,
+          is_winner: true,
+        })),
+        winner_count: winnerRows.length,
+        total_winners: competition.total_winners || 1,
+        total_tickets_sold: totalTickets,
+        total_participants: participants.length,
+        split_info: splitInfo,
+      },
+    });
+  } catch (err) {
+    console.error("❌ getWinnerDetails error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
