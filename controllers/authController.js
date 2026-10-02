@@ -5,7 +5,7 @@ import db from "../config/db.js";
  import { sendWelcomeEmail, sendLoginNotification } from "../services/email.service.js";
 
 export const registerUser = async (req, res) => {
-  const { name, email, password, confirmPassword } = req.body;
+  const { name,phone, email, password, confirmPassword } = req.body;
 
   if (!name || !email || !password || !confirmPassword)
     return res.status(400).json({ message: "All fields are required" });
@@ -29,13 +29,13 @@ export const registerUser = async (req, res) => {
     const [result] = await db
       
       .query(
-        "INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
-        [name, email, hashedPassword]
+        "INSERT INTO users (name, phone, email, password,created_at) VALUES (?, ?, ?, ?, NOW())",
+        [name, phone, email, hashedPassword]
       );
 
     // Optionally return created user info without token
-    const user = { id: result.insertId, name, email };
- await sendWelcomeEmail(email, name);
+    const user = { id: result.insertId, name, phone, email };
+ await sendWelcomeEmail(email, name,phone);
 
     res.status(201).json({
       success: true,
@@ -88,16 +88,18 @@ export const registerUser = async (req, res) => {
 // };
 
 export const loginUser = async (req, res) => {
-  console.log("useremail");
-  const { email, password } = req.body;
+  console.log("User login attempt");
+  const { identifier, password } = req.body;
 
-  if (!email || !password)
-    return res.status(400).json({ message: "Email and password required" });
+  if (!identifier || !password)
+    return res.status(400).json({ message: "Email/Phone and password required" });
 
   try {
-    const [rows] = await db
-      
-      .query("SELECT * FROM users WHERE email = ?", [email]);
+    // Check if identifier matches either email OR phone in the database
+    const [rows] = await db.query(
+      "SELECT * FROM users WHERE email = ? OR phone = ?", 
+      [identifier, identifier]
+    );
 
     if (rows.length === 0)
       return res.status(404).json({ message: "User not found" });
@@ -108,29 +110,18 @@ export const loginUser = async (req, res) => {
     if (!isMatch)
       return res.status(401).json({ message: "Invalid credentials" });
 
-    // const token = jwt.sign({ id: user.Id,
-    //   name: user.name,
-    //   email: user.email, }, process.env.JWT_SECRET, {
-    //   expiresIn: "7d",
-    // });
-
-  //   console.log("Generated user.id,:", user.Id,);
-
-  //   console.log("Generated Token:", user);
-  //  return;
-     const token = generateToken(user);
+    const token = generateToken(user);
 
     const { password: _, ...safeUser } = user; // remove password
 
-
-    await sendLoginNotification(email, user.name, {
-  ip: req.ip,
-  userAgent: req.headers["user-agent"],
-  time: new Date().toLocaleString(),
-});
-//login notification email sent
-console.log(`Login notification email sent to ${email}`);
-
+    // Use user.email for the notification regardless of whether they logged in with email or phone
+    await sendLoginNotification(user.email, user.name, {
+      ip: req.ip,
+      userAgent: req.headers["user-agent"],
+      time: new Date().toLocaleString(),
+    });
+    
+    console.log(`Login notification email sent to ${user.email}`);
 
     res.status(200).json({
       success: true,

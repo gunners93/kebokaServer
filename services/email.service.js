@@ -202,7 +202,7 @@ export const sendEmail = async ({ to, subject, html, text, attachments }) => {
 // ─────────────────────────────────────────────
 // 1. WELCOME / REGISTER
 // ─────────────────────────────────────────────
-export const sendWelcomeEmail = async (to, name) => {
+export const sendWelcomeEmail = async (to, name, phone) => {
   const html = layout({
     title: "Welcome to Keboka",
     preheader: "Your Keboka account is ready — start winning today!",
@@ -221,7 +221,7 @@ export const sendWelcomeEmail = async (to, name) => {
              style="background:${C.lightBg};border-radius:6px;margin:20px 0;">
         <tr>
           <td style="padding:16px;text-align:center;font-size:14px;">
-            Username: <strong>${to}</strong>
+            Username: <strong>${phone}</strong>
           </td>
         </tr>
       </table>
