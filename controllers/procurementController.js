@@ -127,11 +127,31 @@ export const getProcurements = async (req, res) => {
     const [rows] = await db.query(query, params);
 
     // ✅ Safely parse images and attributes
-    const data = rows.map(item => ({
-      ...item,
-      images: safeParseJSON(item.images, []),
-      attributes: safeParseJSON(item.attributes, {}),
-    }));
+    const data = rows.map(item => {
+      // Parse attributes safely as an object, not an array
+      let parsedAttributes = {};
+      if (item.attributes) {
+        try {
+          let attr = item.attributes;
+          // Handle legacy double-stringified data (e.g. ["\"{\\\"units\\\":...}\""])
+          if (Array.isArray(attr) && attr.length > 0) attr = attr[0];
+          if (typeof attr === 'string') attr = JSON.parse(attr);
+          if (Array.isArray(attr) && attr.length > 0 && typeof attr[0] === 'string') {
+            attr = JSON.parse(attr[0]);
+          }
+          parsedAttributes = attr || {};
+        } catch (e) {
+          console.error(`Failed to parse attributes for item ${item.id}:`, e);
+          parsedAttributes = {};
+        }
+      }
+
+      return {
+        ...item,
+        images: safeParseJSON(item.images, []),
+        attributes: parsedAttributes, // ✅ Now an object instead of an array
+      };
+    });
 
     res.json({ success: true, count: data.length, data });
   } catch (err) {
@@ -141,6 +161,8 @@ export const getProcurements = async (req, res) => {
 };
 
 // Get single procurement
+// controllers/adminController.js
+
 export const getProcurement = async (req, res) => {
   try {
     const { id } = req.params;
@@ -166,9 +188,19 @@ export const getProcurement = async (req, res) => {
 
     const item = rows[0];
     
-    // ✅ Safely parse images and attributes
+    // ✅ Safely parse images
     item.images = safeParseJSON(item.images, []);
-    item.attributes = safeParseJSON(item.attributes, {});
+    
+    // ✅ Safely parse attributes (Needs to be an object, NOT an array)
+    if (typeof item.attributes === 'string') {
+      try {
+        item.attributes = JSON.parse(item.attributes);
+      } catch {
+        item.attributes = {};
+      }
+    } else if (!item.attributes) {
+      item.attributes = {};
+    }
 
     res.json({ success: true, data: item });
   } catch (err) {
@@ -208,7 +240,7 @@ export const createProcurement = async (req, res) => {
       bedrooms,
       bathrooms,
       amount,
-      attributes = {}
+      attributes,
     } = req.body;
 
     console.log('Create Procurement Request Body:', req.body);

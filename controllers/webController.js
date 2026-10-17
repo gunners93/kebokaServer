@@ -320,6 +320,8 @@ export const getPublicWinners = async (req, res) => {
         ct.name AS competition_type_name,
         ct.type_name AS competition_type,
         ct.bgcolor AS competition_color,
+        lg.name as lga_name,
+        st.name as state_name,
         t.ticket_number,
         p.title AS procurement_title,
         p.brand AS procurement_brand,
@@ -330,6 +332,8 @@ export const getPublicWinners = async (req, res) => {
         ps.name AS procurement_subcategory_name
       FROM winners w
       LEFT JOIN users u ON w.user_id = u.Id
+       LEFT JOIN lgas lg ON u.lga = lg.id
+        LEFT JOIN states st ON u.state = st.id 
       LEFT JOIN competitions c ON w.competition_id = c.id
       LEFT JOIN competition_types ct ON c.type_id = ct.id
       LEFT JOIN tickets t ON w.ticket_id = t.id
@@ -350,6 +354,9 @@ export const getPublicWinners = async (req, res) => {
         email: w.user_email,
         state: w.user_state,
         lga: w.user_lga,
+        lga_name:w.lga_name,
+        state_name:w.state_name,
+        
         photo: w.user_photo,
         ticket_number: w.ticket_number,
         won_at: w.won_at,
@@ -412,10 +419,11 @@ export const getLiveDraws = async (req, res) => {
         ct.bgcolor AS competition_color,
         ct.img AS competition_type_image,
         (SELECT COUNT(*) FROM tickets t WHERE t.competition_id = c.id) AS tickets_sold,
+         (SELECT COUNT(DISTINCT t.user_id) FROM tickets t WHERE t.competition_id = c.id) AS total_participants,
         (SELECT COUNT(*) FROM winners w WHERE w.competition_id = c.id) AS winners_count
       FROM competitions c
       LEFT JOIN competition_types ct ON c.type_id = ct.id
-      WHERE c.status IN ('Active', 'active', 'Drawing', 'drawing', 'Closed')
+      WHERE c.status IN ('Active', 'active', 'Drawing', 'drawing')
       ORDER BY 
         CASE 
           WHEN c.status IN ('Drawing', 'drawing') THEN 0
@@ -425,7 +433,7 @@ export const getLiveDraws = async (req, res) => {
         c.end_date ASC
       LIMIT 20
     `);
-
+//   WHERE c.status IN ('Active', 'active', 'Drawing', 'drawing', 'Closed')
     const safeParse = (val, fallback = []) => {
       if (!val) return fallback;
       if (Array.isArray(val)) return val;
@@ -469,7 +477,8 @@ export const getLiveDrawById = async (req, res) => {
         ct.type_name AS competition_type,
         ct.bgcolor AS competition_color,
         ct.img AS competition_type_image,
-        (SELECT COUNT(*) FROM tickets t WHERE t.competition_id = c.id) AS tickets_sold
+        (SELECT COUNT(*) FROM tickets t WHERE t.competition_id = c.id) AS tickets_sold,
+        (SELECT COUNT(DISTINCT t.user_id) FROM tickets t WHERE t.competition_id = c.id) AS total_participants
       FROM competitions c
       LEFT JOIN competition_types ct ON c.type_id = ct.id
       WHERE c.id = ?
@@ -499,21 +508,25 @@ export const getLiveDrawById = async (req, res) => {
     // Winners so far
     const [winners] = await db.query(`
       SELECT 
-        w.id,
-        w.won_at,
-        w.status,
-        w.prize_amount,
-        u.name AS name,
-        u.state AS state,
-        u.lga AS lga,
-        u.photo AS user_photo,
-        t.ticket_number
-      FROM winners w
-      LEFT JOIN users u ON w.user_id = u.Id
-      LEFT JOIN tickets t ON w.ticket_id = t.id
-      WHERE w.competition_id = ?
-      ORDER BY w.won_at ASC
-    `, [id]);
+    w.id,
+    w.won_at,
+    w.status,
+    w.prize_amount,
+    u.name   AS name,
+    u.state  AS state_id,
+    u.lga    AS lga_id,
+    s.name   AS state_name,
+    l.name   AS lga_name,
+    u.photo  AS user_photo,
+    t.ticket_number
+  FROM winners w
+  LEFT JOIN users u  ON w.user_id = u.Id
+  LEFT JOIN tickets t ON w.ticket_id = t.id
+  LEFT JOIN states s ON u.state = s.id
+  LEFT JOIN lgas l   ON u.lga = l.id
+  WHERE w.competition_id = ?
+  ORDER BY w.won_at ASC
+`, [id]);
 
     // All tickets (for shuffle animation)
     const [tickets] = await db.query(`
@@ -1126,12 +1139,16 @@ export const getWinnerDetails = async (req, res) => {
     );
 
     if (!compRows.length) {
-      return res.status(404).json({ success: false, message: "Competition not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Competition not found" });
     }
 
     const competition = compRows[0];
 
-    // 2. All winners (joined with user + ticket)
+    // ============================================
+    // 2. All winners — ✅ joined with states + lgas
+    // ============================================
     const [winnerRows] = await db.query(
       `SELECT 
         w.id AS winner_id,
@@ -1144,8 +1161,10 @@ export const getWinnerDetails = async (req, res) => {
         u.name,
         u.email,
         u.phone,
-        u.state,
-        u.lga,
+        u.state AS state_id,
+        u.lga AS lga_id,
+        s.name AS state_name,
+        l.name AS lga_name,
         u.city,
         u.schoolName,
         u.department,
@@ -1155,24 +1174,32 @@ export const getWinnerDetails = async (req, res) => {
       FROM winners w
       JOIN users u ON u.Id = w.user_id
       LEFT JOIN tickets t ON t.id = w.ticket_id
+      LEFT JOIN states s ON u.state = s.id
+      LEFT JOIN lgas l ON u.lga = l.id
       WHERE w.competition_id = ?
       ORDER BY w.won_at ASC`,
       [competitionId]
     );
 
-    // 3. All participants (for Supabol/Komon split calculations)
+    // ============================================
+    // 3. All participants — ✅ joined with states + lgas
+    // ============================================
     const [participants] = await db.query(
       `SELECT 
         u.Id AS user_id,
         u.name,
         u.email,
-        u.state,
-        u.lga,
+        u.state AS state_id,
+        u.lga AS lga_id,
+        s.name AS state_name,
+        l.name AS lga_name,
         u.schoolName,
         t.id AS ticket_id,
         t.ticket_number
       FROM tickets t
       JOIN users u ON u.Id = t.user_id
+      LEFT JOIN states s ON u.state = s.id
+      LEFT JOIN lgas l ON u.lga = l.id
       WHERE t.competition_id = ?
       GROUP BY t.user_id`,
       [competitionId]
@@ -1218,8 +1245,8 @@ export const getWinnerDetails = async (req, res) => {
           p.user_id !== winner.user_id
       );
 
-      const winnerShare = prizeValue * 0.20;
-      const sharedPool = prizeValue * 0.80;
+      const winnerShare = prizeValue * 0.2;
+      const sharedPool = prizeValue * 0.8;
       const perParticipant =
         sameSchoolParticipants.length > 0
           ? sharedPool / sameSchoolParticipants.length
@@ -1245,14 +1272,14 @@ export const getWinnerDetails = async (req, res) => {
       const winner = winnerRows[0];
       const sameLgaParticipants = participants.filter(
         (p) =>
-          p.lga &&
-          winner.lga &&
-          p.lga.toLowerCase() === winner.lga.toLowerCase() &&
+          p.lga_id &&
+          winner.lga_id &&
+          Number(p.lga_id) === Number(winner.lga_id) &&
           p.user_id !== winner.user_id
       );
 
-      const winnerShare = prizeValue * 0.10;
-      const sharedPool = prizeValue * 0.90;
+      const winnerShare = prizeValue * 0.1;
+      const sharedPool = prizeValue * 0.9;
       const perParticipant =
         sameLgaParticipants.length > 0
           ? sharedPool / sameLgaParticipants.length
@@ -1264,18 +1291,33 @@ export const getWinnerDetails = async (req, res) => {
         sharedPool,
         totalParticipants: sameLgaParticipants.length,
         perParticipant,
-        lga: winner.lga,
-        state: winner.state,
+        lga: winner.lga_name || winner.lga_id,
+        state: winner.state_name || winner.state_id,
+        lga_name: winner.lga_name,
+        state_name: winner.state_name,
         participants: sameLgaParticipants.map((p) => ({
           name: p.name,
           ticket_number: p.ticket_number,
-          lga: p.lga,
-          state: p.state,
+          lga: p.lga_name || p.lga_id,
+          state: p.state_name || p.state_id,
+          lga_name: p.lga_name,
+          state_name: p.state_name,
         })),
       };
     }
 
-    // 7. Send response
+    // 7. Normalize winners — add pre-formatted location
+    const normalizedWinners = winnerRows.map((w) => ({
+      ...w,
+      is_winner: true,
+      location:
+        [w.lga_name, w.state_name].filter(Boolean).join(", ") || null,
+      // Backward-compat fields (in case frontend still reads these)
+      state: w.state_name || w.state_id,
+      lga: w.lga_name || w.lga_id,
+    }));
+
+    // 8. Send response
     return res.json({
       success: true,
       data: {
@@ -1284,10 +1326,7 @@ export const getWinnerDetails = async (req, res) => {
           images: competitionImages,
           procurement_images: prizeImages,
         },
-        winners: winnerRows.map((w) => ({
-          ...w,
-          is_winner: true,
-        })),
+        winners: normalizedWinners,
         winner_count: winnerRows.length,
         total_winners: competition.total_winners || 1,
         total_tickets_sold: totalTickets,

@@ -908,3 +908,205 @@ export const drawCompetitionWinner = async (req, res) => {
     connection.release();
   }
 };
+
+
+
+// ============================================
+// CRON JOB: DRAW WINNER (no req/res — for background job)
+// - Picks ONE random ticket per run
+// - No duplicates
+// - Safe to call repeatedly: no-op if already complete
+// ============================================
+export const drawCompetitionWinnerByCornJob = async (competitionId) => {
+  const connection = await db.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    // 1. Lock competition row
+    const [comp] = await connection.query(
+      'SELECT * FROM competitions WHERE id = ? FOR UPDATE',
+      [competitionId]
+    );
+
+    if (!comp.length) {
+      await connection.rollback();
+      connection.release();
+      return { success: false, reason: 'not_found', competitionId };
+    }
+
+    const competition = comp[0];
+    const totalWinners = competition.total_winners || 1;
+    const winnersDrawn = competition.winners_drawn || 0;
+
+    // 2. Already complete?
+    if (winnersDrawn >= totalWinners) {
+      await connection.rollback();
+      connection.release();
+      return {
+        success: false,
+        reason: 'already_complete',
+        competitionId,
+        totalWinners,
+        winnersDrawn,
+      };
+    }
+
+    // 3. Get eligible tickets (no duplicates)
+    const [availableTickets] = await connection.query(
+      `
+      SELECT t.id, t.ticket_number, t.user_id
+      FROM tickets t
+      WHERE t.competition_id = ?
+        AND t.is_winner = 0
+        AND t.user_id NOT IN (
+          SELECT DISTINCT w.user_id
+          FROM winners w
+          WHERE w.competition_id = ?
+        )
+    `,
+      [competitionId, competitionId]
+    );
+
+    if (availableTickets.length === 0) {
+      await connection.rollback();
+      connection.release();
+      return {
+        success: false,
+        reason: 'no_eligible_tickets',
+        competitionId,
+      };
+    }
+
+    // 4. Pick a random winner
+    const randomIndex = Math.floor(Math.random() * availableTickets.length);
+    const winningTicket = availableTickets[randomIndex];
+    const winningTicketId = Number(winningTicket.id);
+    const winningUserId = Number(winningTicket.user_id);
+    const compId = Number(competitionId);
+
+    // 5. Mark ticket as winner
+    await connection.query(
+      'UPDATE tickets SET is_winner = 1 WHERE id = ?',
+      [winningTicketId]
+    );
+
+    // 6. Insert winner record
+    await connection.query(
+      `INSERT INTO winners (user_id, competition_id, ticket_id, status, won_at, created_at)
+       VALUES (?, ?, ?, 'pending', NOW(), NOW())`,
+      [winningUserId, compId, winningTicketId]
+    );
+
+    // 7. Update winners_drawn count
+    const newWinnersDrawn = winnersDrawn + 1;
+    await connection.query(
+      'UPDATE competitions SET winners_drawn = ? WHERE id = ?',
+      [newWinnersDrawn, compId]
+    );
+
+    // 8. Close competition if all winners drawn
+    if (newWinnersDrawn >= totalWinners) {
+      await connection.query(
+        "UPDATE competitions SET status = 'Closed' WHERE id = ?",
+        [compId]
+      );
+    }
+
+    // 9. Winner details
+    const [winnerDetails] = await connection.query(
+      'SELECT name, email FROM users WHERE Id = ?',
+      [winningUserId]
+    );
+
+    // 10. Prize name
+    const [prizeRows] = await connection.query(
+      `SELECT p.title AS prize_name
+       FROM competition_prizes cp
+       JOIN procurements p ON cp.procurement_id = p.id
+       WHERE cp.competition_id = ?
+       ORDER BY cp.id ASC
+       LIMIT 1`,
+      [compId]
+    );
+
+    const prizeName =
+      prizeRows[0]?.prize_name || competition.title || 'the prize';
+
+    // 11. COMMIT before emails
+    await connection.commit();
+    connection.release();
+
+    console.log(
+      `🎉 [CRON] Winner ${newWinnersDrawn}/${totalWinners} drawn for competition ${compId}`
+    );
+
+    // 12. Send emails (non-blocking)
+    try {
+      const [participants] = await db.query(
+        `SELECT DISTINCT u.Id AS id, u.name, u.email
+         FROM users u
+         JOIN tickets t ON t.user_id = u.Id
+         WHERE t.competition_id = ?`,
+        [compId]
+      );
+
+      const winner = winnerDetails[0] || null;
+
+      const info = {
+        title: competition.title || 'Competition',
+        drawDate: new Date().toLocaleString(),
+        prizeName,
+        winnerName: winner?.name || 'See live draw',
+        resultsUrl: 'https://www.keboka.com/winners',
+      };
+
+      for (const p of participants) {
+        try {
+          await sendDrawNotification(p.email, p.name, {
+            ...info,
+            isWinner: Number(p.id) === winningUserId,
+          });
+        } catch (err) {
+          console.error(`⚠️ Draw email failed for ${p.email}:`, err.message);
+        }
+      }
+
+      console.log(
+        `📧 [CRON] Draw notification sent to ${participants.length} participant(s)`
+      );
+    } catch (emailErr) {
+      console.error('⚠️ [CRON] Draw email batch failed:', emailErr.message);
+    }
+
+    return {
+      success: true,
+      competitionId: compId,
+      winner: {
+        name: winnerDetails[0]?.name || 'Unknown',
+        email: winnerDetails[0]?.email,
+        ticket: winningTicket.ticket_number,
+      },
+      progress: {
+        current: newWinnersDrawn,
+        total: totalWinners,
+        remaining: totalWinners - newWinnersDrawn,
+        is_complete: newWinnersDrawn >= totalWinners,
+      },
+    };
+  } catch (err) {
+    try {
+      await connection.rollback();
+    } catch {}
+    try {
+      connection.release();
+    } catch {}
+    console.error('❌ [CRON] Draw Winner Error:', err);
+    return {
+      success: false,
+      reason: 'error',
+      competitionId,
+      error: err.message,
+    };
+  }
+};

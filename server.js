@@ -10,6 +10,7 @@ import procurementRoutes from './routes/procurementRoutes.js';
 import competitionRoutes from './routes/competitionRoutes.js';
 import path from "path";
 import competitionTypeRoutes from './routes/competitionTypeRoutes.js';
+import { startDrawCron } from './jobs/drawCronJob.js';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -108,4 +109,6 @@ app.get('/api/pay/test-config', (req, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server is running successfully on port ${PORT}`);
   console.log(`📍 Public URL: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`);
+
+    startDrawCron();
 });
