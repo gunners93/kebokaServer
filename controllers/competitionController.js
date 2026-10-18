@@ -227,9 +227,11 @@ export const createCompetition = async (req, res) => {
     await connection.beginTransaction();
 
     const {
-      title, type_id, prizes,        // ✅ prizes = [{ procurement_id, quantity }]
+      title, type_id, prizes,        // ✅ prizes comes in as stringified array
       description, start_date, end_date,
       entry_fee, total_participants, total_winners = 1, status = 'Active',
+        has_cash_alternative = 'no',
+  cash_alternative_amount = 0,
     } = req.body;
 
     // Normalize prizes
@@ -238,6 +240,16 @@ export const createCompetition = async (req, res) => {
       try { prizeList = JSON.parse(prizes); } catch { prizeList = []; }
     } else if (Array.isArray(prizes)) {
       prizeList = prizes;
+    }
+
+    // If the frontend accidentally sends procurement_ids instead
+    if (prizeList.length === 0 && req.body.procurement_ids) {
+      try {
+        const ids = JSON.parse(req.body.procurement_ids);
+        prizeList = ids.map(id => ({ procurement_id: id, quantity: 1 }));
+      } catch (e) {
+        // fallback
+      }
     }
 
     if (!title || !type_id || prizeList.length === 0 || !start_date || !end_date || !entry_fee) {
@@ -277,12 +289,12 @@ export const createCompetition = async (req, res) => {
     const [result] = await connection.query(
       `INSERT INTO competitions 
        (title, type_id, procurement_id, description, start_date, end_date, entry_fee,
-        total_participants, total_winners, status, images) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        total_participants, total_winners, status, images,has_cash_alternative, cash_alternative_amount) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?)`,
       [
         title,
         parseInt(type_id),
-        procurementIds[0],
+        procurementIds[0], // Sets the primary procurement_id
         description || null,
         start_date, end_date,
         parseFloat(entry_fee),
@@ -290,12 +302,14 @@ export const createCompetition = async (req, res) => {
         parseInt(total_winners) || 1,
         status,
         imageFilenames,
+        has_cash_alternative || 'no',
+        parseFloat(cash_alternative_amount) || 0
       ]
     );
 
     const competitionId = result.insertId;
 
-    // Insert each prize with its own quantity
+    // Insert each prize with its own quantity into the junction table
     const prizeRows = prizeList.map((p) => [
       competitionId,
       Number(p.procurement_id),
@@ -306,7 +320,7 @@ export const createCompetition = async (req, res) => {
       [prizeRows]
     );
 
-    // ✅ Deduct per-prize quantity
+    // Deduct per-prize quantity from stock
     for (const p of prizeList) {
       await connection.query(
         `UPDATE procurements 
@@ -326,7 +340,6 @@ export const createCompetition = async (req, res) => {
     connection.release();
   }
 };
-
 
 // Update competition
 // controllers/competitionController.js
@@ -348,6 +361,7 @@ export const updateCompetition = async (req, res) => {
       total_participants,
       total_winners = 1,
       status,
+     
     } = req.body;
 
     // Normalize ids

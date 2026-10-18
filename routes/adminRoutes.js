@@ -107,4 +107,6 @@ router.delete('/competitions/:id', adminController.deleteCompetition);
 router.get('/competitions/:id/details', adminController.getCompetitionFullDetails);
 router.post('/competitions/:id/draw', adminController.drawCompetitionWinner);
 
+
+
 export default router;

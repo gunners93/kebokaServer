@@ -4,6 +4,48 @@ import db from "../config/db.js";
  import { generateToken } from "../utils/generateToken.js";
  import { sendWelcomeEmail, sendLoginNotification } from "../services/email.service.js";
 
+
+ export const changePassword = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { oldPassword, newPassword } = req.body;
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ success: false, message: "Please provide old and new passwords" });
+    }
+
+    // 1. Get user from DB
+    const [rows] = await db.query("SELECT password FROM users WHERE id = ?", [userId]);
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const user = rows[0];
+
+    // 2. Check if old password matches
+    const isMatch = await bcrypt.compare(oldPassword, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: "Incorrect current password" });
+    }
+
+    // 3. Hash the new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    // 4. Save new password to DB
+    await db.query("UPDATE users SET password = ? WHERE id = ?", [hashedPassword, userId]);
+
+    res.json({
+      success: true,
+      message: "Password updated successfully",
+    });
+  } catch (err) {
+    console.error("Change Password Error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
 export const registerUser = async (req, res) => {
   const { name,phone, email, password, confirmPassword } = req.body;
 
@@ -148,16 +190,13 @@ export const getMe = async (req, res) => {
   }
 };
 export const userProfileUpdate = async (req, res) => {
-   const userId = req.user.id;
- 
+  const userId = req.user.id;
+
   if (!userId) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-
   const {
-    name,
-    email,
     phone,
     state,
     lga,
@@ -166,12 +205,26 @@ export const userProfileUpdate = async (req, res) => {
     occupation,
     schoolName,
     department,
+    // ✅ Added Surprise Contact fields
+    surprise_contact_name,
+    surprise_contact_phone,
   } = req.body;
 
   try {
     // Update user
     await db.query(
-      `UPDATE users SET phone = ?, state = ?, lga = ?, city = ?, isStudent = ?, occupation = ?, schoolName = ?, department = ? WHERE id = ?`,
+      `UPDATE users SET 
+        phone = ?, 
+        state = ?, 
+        lga = ?, 
+        city = ?, 
+        isStudent = ?, 
+        occupation = ?, 
+        schoolName = ?, 
+        department = ?,
+        surprise_contact_name = ?,
+        surprise_contact_phone = ?
+      WHERE id = ?`,
       [
         phone,
         state,
@@ -181,24 +234,17 @@ export const userProfileUpdate = async (req, res) => {
         occupation,
         schoolName,
         department,
+        surprise_contact_name,
+        surprise_contact_phone,
         userId,
       ]
     );
 
     // Get updated user
-    // const [rows] = await db.query(
-    //   `SELECT id, name, email, phone, state, lga, city, isStudent, occupation, schoolName, department 
-    //    FROM users WHERE id = ?`,
-    //   [userId]
-    // );
-
-      const query = "SELECT * FROM users WHERE id = ?";
+    const query = "SELECT * FROM users WHERE id = ?";
     const [rows] = await db.query(query, [userId]);
-    //show query result in console
-   // console.log(query);
 
     const updatedUser = rows[0];
-    // console.log("Updated user data:", updatedUser);
 
     res.json({
       success: true,

@@ -7,10 +7,12 @@ import { getPrizeDetails,getCompetitionById,getCompetitions_web,getcompetitionst
 // import {sendForgotPasswordEmail,resetPassword} from '../controllers/emailUtility.js';
 import { sendForgotPasswordEmail, resetPassword } from '../services/email.js';
 import {purchaseTickets} from '../controllers/tickets.js';
+import {changePassword,uploadKyc} from '../controllers/authController.js';
 //procurements 
 
 const router = express.Router();
-import { uploadKyc } from '../controllers/authController.js'; 
+router.put('/change-password', verifyToken, changePassword);
+
 router.post('/signup', registerUser);
 router.post('/login', loginUser);
 router.post('/adminLogin', adminLogin);
