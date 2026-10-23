@@ -878,7 +878,17 @@ const safeParseImages = (val) => {
   }
 };
 
-
+// controllers/webController.js
+export const getBanks = async (req, res) => {
+  try {
+    // Assuming you have a 'banks' table in your database
+    const [rows] = await db.query("SELECT id, bank_name,bank_code FROM banks ORDER BY bank_name ASC");
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error("❌ getBanks error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 
 // ============================================
 // GET MY TICKETS

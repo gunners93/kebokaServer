@@ -3,10 +3,11 @@ import { registerUser, loginUser,getMe } from '../controllers/authController.js'
 import { verifyToken } from '../middleware/authMiddleware.js';
 import { upload } from "../middleware/upload.js";
 
-import {getPopularCompetitions_web,getEndingSoonCompetitions_web,getLiveDraws,getLiveDrawById,getPublicWinners,getCompetitionTypeBySlug, getStates,getLgasByState,getSchools,getcompetitionstype_web,getCompetitionTypes_web,getCompetitions_web,getWinnerDetails  } from '../controllers/webController.js';
+import {getPopularCompetitions_web,getEndingSoonCompetitions_web,getLiveDraws,getLiveDrawById,getPublicWinners,getCompetitionTypeBySlug, getStates,getLgasByState,getSchools,getcompetitionstype_web,getCompetitionTypes_web,getCompetitions_web,getWinnerDetails,getBanks  } from '../controllers/webController.js';
 const router = express.Router();
 
 //getcompetitionstype_web
+router.get('/banks', getBanks);
 router.get('/competitions/:type', getcompetitionstype_web );
 
 router.get('/competitions_web', getCompetitions_web);
