@@ -173,7 +173,7 @@ export const getCompetitions_web = async (req, res) => {
        LEFT JOIN procurements p ON c.procurement_id = p.id
        LEFT JOIN procurement_categories pc ON p.category_id = pc.id
        LEFT JOIN procurement_subcategories ps ON p.subcategory_id = ps.id
-       WHERE c.status IN ('Active', 'active', 'Drawing', 'drawing', 'upcoming', 'upcoming')
+     
        ORDER BY c.end_date  ASC`
     );
 
