@@ -353,7 +353,8 @@ export const updateCompetition = async (req, res) => {
     const {
       title,
       type_id,
-      procurement_ids,
+      prizes,                    // ✅ Frontend sends this
+      procurement_ids,           // fallback for older clients
       description,
       start_date,
       end_date,
@@ -361,101 +362,158 @@ export const updateCompetition = async (req, res) => {
       total_participants,
       total_winners = 1,
       status,
-     
+      has_cash_alternative,
+      cash_alternative_amount,
     } = req.body;
 
-    // Normalize ids
-    let newProcurementIds = [];
-    if (Array.isArray(procurement_ids)) {
-      newProcurementIds = procurement_ids;
-    } else if (typeof procurement_ids === 'string') {
-      try {
-        newProcurementIds = JSON.parse(procurement_ids);
-      } catch {
-        newProcurementIds = procurement_ids.split(',').map((s) => s.trim());
-      }
-    }
-    newProcurementIds = [...new Set(newProcurementIds.filter(Boolean).map(Number))];
+    // ============================================
+    // 1. Normalize Prizes (from either prizes OR procurement_ids)
+    // ============================================
+    let prizeList = [];
 
+    // ✅ Primary: parse `prizes` (the new frontend format)
+    if (typeof prizes === 'string') {
+      try {
+        prizeList = JSON.parse(prizes);
+      } catch {
+        prizeList = [];
+      }
+    } else if (Array.isArray(prizes)) {
+      prizeList = prizes;
+    }
+
+    // 🔄 Fallback: if `prizes` is empty but `procurement_ids` is provided
+    if (prizeList.length === 0 && procurement_ids) {
+      let ids = [];
+      if (Array.isArray(procurement_ids)) {
+        ids = procurement_ids;
+      } else if (typeof procurement_ids === 'string') {
+        try {
+          ids = JSON.parse(procurement_ids);
+        } catch {
+          ids = procurement_ids.split(',').map((s) => s.trim());
+        }
+      }
+      ids = [...new Set(ids.filter(Boolean).map(Number))];
+      prizeList = ids.map((pid) => ({ procurement_id: pid, quantity: 1 }));
+    }
+
+    // Clean up
+    prizeList = prizeList
+      .filter((p) => p && p.procurement_id)
+      .map((p) => ({
+        procurement_id: Number(p.procurement_id),
+        quantity: Number(p.quantity) || 1,
+      }));
+
+    if (prizeList.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'At least one prize is required',
+      });
+    }
+
+    const newProcurementIds = prizeList.map((p) => p.procurement_id);
     const winnersCount = parseInt(total_winners) || 1;
 
-    // Get existing linked prizes
+    // ============================================
+    // 2. Get existing prizes with their quantities
+    // ============================================
     const [existingPrizes] = await connection.query(
-      `SELECT procurement_id FROM competition_prizes WHERE competition_id = ?`,
+      `SELECT procurement_id, quantity FROM competition_prizes WHERE competition_id = ?`,
       [id]
     );
+
+    // ============================================
+    // 3. Determine removed & added (per procurement)
+    // ============================================
     const existingIds = existingPrizes.map((p) => p.procurement_id);
+    const removed = existingPrizes.filter(
+      (p) => !newProcurementIds.includes(p.procurement_id)
+    );
+    const added = prizeList.filter(
+      (p) => !existingIds.includes(p.procurement_id)
+    );
 
-    // Determine removed + added
-    const removed = existingIds.filter((pid) => !newProcurementIds.includes(pid));
-    const added = newProcurementIds.filter((pid) => !existingIds.includes(pid));
-
-    // Validate added procurements have stock
+    // ============================================
+    // 4. Validate stock for added prizes
+    // ============================================
     if (added.length > 0) {
+      const addedIds = added.map((p) => p.procurement_id);
       const [procs] = await connection.query(
         `SELECT id, title, available_quantity FROM procurements WHERE id IN (?)`,
-        [added]
+        [addedIds]
       );
 
-      const insufficient = procs.filter((p) => (p.available_quantity || 0) < winnersCount);
-      if (insufficient.length > 0) {
-        await connection.rollback();
-        return res.status(400).json({
-          success: false,
-          message: `Not enough stock. ${insufficient
-            .map((p) => `"${p.title}" has ${p.available_quantity}, need ${winnersCount}`)
-            .join('; ')}`,
-        });
+      for (const prize of added) {
+        const proc = procs.find((p) => p.id === prize.procurement_id);
+        if (!proc) {
+          await connection.rollback();
+          return res.status(400).json({
+            success: false,
+            message: `Procurement ${prize.procurement_id} not found`,
+          });
+        }
+        if ((proc.available_quantity || 0) < prize.quantity) {
+          await connection.rollback();
+          return res.status(400).json({
+            success: false,
+            message: `"${proc.title}" only has ${proc.available_quantity} available, but you requested ${prize.quantity}`,
+          });
+        }
       }
     }
 
-    // ✅ Restore stock for removed prizes
-    if (removed.length > 0) {
+    // ============================================
+    // 5. Restore stock for REMOVED prizes
+    // ============================================
+    for (const prize of removed) {
       await connection.query(
         `UPDATE procurements 
          SET available_quantity = available_quantity + ?, updated_at = NOW()
-         WHERE id IN (?)`,
-        [winnersCount, removed]
+         WHERE id = ?`,
+        [prize.quantity || winnersCount, prize.procurement_id]
       );
     }
 
-    // ✅ Deduct stock for added prizes
-    if (added.length > 0) {
+    // ============================================
+    // 6. Deduct stock for ADDED prizes
+    // ============================================
+    for (const prize of added) {
       await connection.query(
         `UPDATE procurements 
          SET available_quantity = available_quantity - ?, updated_at = NOW()
-         WHERE id IN (?)`,
-        [winnersCount, added]
+         WHERE id = ?`,
+        [prize.quantity, prize.procurement_id]
       );
     }
 
-    // ✅ Refresh junction table
-    if (removed.length > 0 || added.length > 0) {
-      await connection.query(
-        `DELETE FROM competition_prizes WHERE competition_id = ? AND procurement_id IN (?)`,
-        [id, removed.length > 0 ? removed : [0]]
-      );
+    // ============================================
+    // 7. Rebuild the junction table (competition_prizes)
+    // ============================================
+    await connection.query(
+      `DELETE FROM competition_prizes WHERE competition_id = ?`,
+      [id]
+    );
 
-      if (added.length > 0) {
-        const rows = added.map((pid) => [id, pid, winnersCount]);
-        await connection.query(
-          `INSERT INTO competition_prizes (competition_id, procurement_id, quantity) VALUES ?`,
-          [rows]
-        );
-      }
+    const prizeRows = prizeList.map((p) => [
+      id,
+      p.procurement_id,
+      p.quantity,
+    ]);
+    await connection.query(
+      `INSERT INTO competition_prizes (competition_id, procurement_id, quantity) VALUES ?`,
+      [prizeRows]
+    );
 
-      // Update quantity for existing that stayed
-      await connection.query(
-        `UPDATE competition_prizes SET quantity = ? WHERE competition_id = ?`,
-        [winnersCount, id]
-      );
-    }
-
-    // ✅ Update the competition row
+    // ============================================
+    // 8. Update the competition row
+    // ============================================
     const updates = {
       title,
       type_id,
-      procurement_id: newProcurementIds[0] || null,
+      procurement_id: newProcurementIds[0], // ✅ Guaranteed non-null
       description,
       start_date,
       end_date,
@@ -464,6 +522,14 @@ export const updateCompetition = async (req, res) => {
       total_winners: winnersCount,
       status,
     };
+
+    // Add cash alternative fields if provided
+    if (has_cash_alternative !== undefined) {
+      updates.has_cash_alternative = has_cash_alternative;
+    }
+    if (cash_alternative_amount !== undefined) {
+      updates.cash_alternative_amount = Number(cash_alternative_amount) || 0;
+    }
 
     const updateFields = [];
     const values = [];
@@ -488,13 +554,21 @@ export const updateCompetition = async (req, res) => {
 
     await connection.commit();
 
-    console.log(`✅ Competition ${id} updated. Removed: ${removed.length}, Added: ${added.length}`);
+    console.log(
+      `✅ Competition ${id} updated. Removed: ${removed.length}, Added: ${added.length}, Total prizes: ${prizeList.length}`
+    );
 
-    return res.json({ success: true, message: 'Competition updated successfully' });
+    return res.json({
+      success: true,
+      message: 'Competition updated successfully',
+    });
   } catch (err) {
     await connection.rollback();
     console.error('❌ UPDATE COMPETITION ERROR:', err);
-    return res.status(500).json({ success: false, message: err.sqlMessage || err.message });
+    return res.status(500).json({
+      success: false,
+      message: err.sqlMessage || err.message,
+    });
   } finally {
     connection.release();
   }
