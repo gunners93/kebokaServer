@@ -2,7 +2,7 @@
 import cron from 'node-cron';
 import db from '../config/db.js';
 import { drawCompetitionWinnerByCornJob } from '../controllers/competitionController.js';
-
+import { autoConfirmDeliveries } from '../controllers/claimController.js';
 // ============================================
 // CONFIG
 // ============================================
@@ -69,6 +69,7 @@ const getCompetitionsReadyToDraw = async () => {
 // THE MAIN CRON TASK
 // ============================================
 const runDrawSweep = async () => {
+  await autoConfirmDeliveries();
   console.log(`\n🤖 [CRON] Draw sweep starting at ${new Date().toISOString()}`);
 
   try {

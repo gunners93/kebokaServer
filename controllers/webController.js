@@ -894,6 +894,7 @@ export const getBanks = async (req, res) => {
 // ============================================
 // GET MY TICKETS
 // ============================================
+// controllers/webController.js
 export const getMyTickets = async (req, res) => {
   console.log("🎟️ Fetching tickets for user:", req.user.id);
 
@@ -907,6 +908,13 @@ export const getMyTickets = async (req, res) => {
         t.status,
         t.is_winner,
         t.created_at,
+        
+        -- ✅ WINNER DATA (For Claim Status)
+        w.id AS winner_id,
+        w.claim_status,
+        w.pickup_option,
+        w.tracking_number,
+
         c.id AS competition_id,
         c.title AS competition_title,
         c.type_id,
@@ -917,13 +925,15 @@ export const getMyTickets = async (req, res) => {
         c.total_participants,
         c.total_winners,
         c.winners_drawn,
-        c.winner_id,
+        c.winner_id AS comp_winner_id,
         c.winning_ticket_number,
         c.images AS competition_images,
+        
         ct.name AS competition_type_name,
         ct.type_name AS competition_type,
         ct.img AS competition_type_image,
         ct.bgcolor AS competition_type_color,
+        
         p.id AS procurement_id,
         p.title AS procurement_title,
         p.description AS procurement_description,
@@ -938,6 +948,7 @@ export const getMyTickets = async (req, res) => {
         ps.name AS procurement_subcategory_name
       FROM tickets t
       JOIN competitions c ON t.competition_id = c.id
+      LEFT JOIN winners w ON w.ticket_id = t.id
       LEFT JOIN competition_types ct ON c.type_id = ct.id
       LEFT JOIN procurements p ON c.procurement_id = p.id
       LEFT JOIN procurement_categories pc ON p.category_id = pc.id
@@ -947,11 +958,19 @@ export const getMyTickets = async (req, res) => {
     `, [userId]);
 
     const formattedTickets = rows.map(ticket => ({
-      id: ticket.id,
+      id: ticket.id, // The ticket ID
       ticket_number: ticket.ticket_number,
       status: ticket.status || 'active',
       is_winner: ticket.is_winner === 1 || ticket.is_winner === true,
       created_at: ticket.created_at,
+      
+      // ✅ Add the winner claim info right at the top level
+      // If it's not a winning ticket, these will be null
+      winner_id: ticket.winner_id, 
+      claim_status: ticket.claim_status,
+      pickup_option: ticket.pickup_option,
+      tracking_number: ticket.tracking_number,
+
       competition: {
         id: ticket.competition_id,
         title: ticket.competition_title,
@@ -970,7 +989,7 @@ export const getMyTickets = async (req, res) => {
         total_winners: ticket.total_winners || 1,
         winners_drawn: ticket.winners_drawn || 0,
         images: safeParseJSON(ticket.competition_images, []),
-        winner_id: ticket.winner_id,
+        winner_id: ticket.comp_winner_id,
         winning_ticket_number: ticket.winning_ticket_number,
       },
       procurement: ticket.procurement_id ? {
@@ -1354,3 +1373,6 @@ export const getWinnerDetails = async (req, res) => {
     });
   }
 };
+
+
+

@@ -11,6 +11,7 @@ import competitionRoutes from './routes/competitionRoutes.js';
 import path from "path";
 import competitionTypeRoutes from './routes/competitionTypeRoutes.js';
 import { startDrawCron } from './jobs/drawCronJob.js';
+import { autoConfirmDeliveries } from './controllers/claimController.js';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;

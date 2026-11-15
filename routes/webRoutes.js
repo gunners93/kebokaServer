@@ -2,9 +2,27 @@ import express from 'express';
 import { registerUser, loginUser,getMe } from '../controllers/authController.js';
 import { verifyToken } from '../middleware/authMiddleware.js';
 import { upload } from "../middleware/upload.js";
+import {
+  getClaimDetails,
+  submitClaim,
+  submitFeedback,
+  confirmDelivery,
+  uploadClaimMedia,
+} from '../controllers/claimController.js';
 
 import {getPopularCompetitions_web,getEndingSoonCompetitions_web,getLiveDraws,getLiveDrawById,getPublicWinners,getCompetitionTypeBySlug, getStates,getLgasByState,getSchools,getcompetitionstype_web,getCompetitionTypes_web,getCompetitions_web,getWinnerDetails,getBanks  } from '../controllers/webController.js';
 const router = express.Router();
+
+
+
+
+
+router.get('/claims/:winnerId', verifyToken, getClaimDetails);
+router.post('/claims/:winnerId', verifyToken, submitClaim);
+router.post('/claims/:winnerId/feedback', verifyToken, uploadClaimMedia, submitFeedback);
+router.post('/claims/:winnerId/confirm-delivery', verifyToken, confirmDelivery);
+
+
 
 //getcompetitionstype_web
 router.get('/banks', getBanks);
