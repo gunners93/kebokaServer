@@ -28,19 +28,20 @@ export const uploadClaimMedia = multer({
 // GET winner claim details
 // GET /api/v2/claims/:winnerId
 // ============================================
+// controllers/claimController.js
+
 export const getClaimDetails = async (req, res) => {
   try {
-    const { winnerId } = req.params;
+    const { winnerId } = req.params; // ticket_id
     const userId = req.user.id;
 
     const [rows] = await db.query(
       `SELECT 
-        w.*,
+        w.*, 
         c.title AS competition_title,
         c.has_cash_alternative,
         c.cash_alternative_amount,
         c.images AS competition_images,
-        c.entry_fee,
         u.name AS user_name,
         u.phone AS user_phone,
         t.ticket_number
@@ -56,28 +57,24 @@ export const getClaimDetails = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Winner record not found' });
     }
 
+    const winner = rows[0];
+    const actualWinnerId = winner.id;
+
+    // Parse competition images
+    const safeParse = (v) => { try { return v ? JSON.parse(v) : []; } catch { return []; } };
+    winner.competition_images = safeParse(winner.competition_images);
+
+    // Get claim data
     const [claimRows] = await db.query(
       `SELECT * FROM winner_claims WHERE winner_id = ? LIMIT 1`,
-      [winnerId]
+      [actualWinnerId]
     );
-
-    const winner = rows[0];
-    const safeParse = (v) => {
-      if (!v) return [];
-      try { return typeof v === 'string' ? JSON.parse(v) : v; } catch { return []; }
-    };
 
     res.json({
       success: true,
       data: {
-        winner: {
-          ...winner,
-          competition_images: safeParse(winner.competition_images),
-        },
-        claim: claimRows.length ? {
-          ...claimRows[0],
-          media_images: safeParse(claimRows[0].media_images),
-        } : null,
+        winner,
+        claim: claimRows.length ? claimRows[0] : null,
       },
     });
   } catch (err) {

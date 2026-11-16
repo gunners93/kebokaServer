@@ -1005,7 +1005,189 @@ export const drawCompetitionWinner = async (req, res) => {
 // - No duplicates
 // - Safe to call repeatedly: no-op if already complete
 // ============================================
+
+
+// controllers/competitionController.js
+
+// controllers/competitionController.js
+
 export const drawCompetitionWinnerByCornJob = async (competitionId) => {
+  const connection = await db.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [comp] = await connection.query(
+      'SELECT * FROM competitions WHERE id = ? FOR UPDATE',
+      [competitionId]
+    );
+    if (!comp.length) {
+      await connection.rollback();
+      return { success: false, reason: 'not_found' };
+    }
+
+    const competition = comp[0];
+    const totalWinners = competition.total_winners || 1;
+    const winnersDrawn = competition.winners_drawn || 0;
+
+    if (winnersDrawn >= totalWinners) {
+      await connection.rollback();
+      return { success: false, reason: 'already_complete' };
+    }
+
+    // Get eligible tickets
+    const [availableTickets] = await connection.query(`
+      SELECT t.id, t.ticket_number, t.user_id, u.lga, u.schoolName
+      FROM tickets t
+      JOIN users u ON t.user_id = u.Id
+      WHERE t.competition_id = ?
+        AND t.is_winner = 0
+        AND t.user_id NOT IN (
+          SELECT DISTINCT user_id FROM winners WHERE competition_id = ?
+        )
+    `, [competitionId, competitionId]);
+
+    if (availableTickets.length === 0) {
+      await connection.rollback();
+      return { success: false, reason: 'no_eligible_tickets' };
+    }
+
+    // 1. Pick Primary Winner
+    const primaryTicket = availableTickets[Math.floor(Math.random() * availableTickets.length)];
+    
+    // 2. Get competition type to check for KOMONWEALTH / SUPABOL
+    const [ctRows] = await connection.query('SELECT type_name FROM competition_types WHERE id = ?', [competition.type_id]);
+    const typeName = ctRows[0]?.type_name?.toUpperCase();
+
+    // ✅ Hardcoded Fixed Amounts as requested
+    const KOMONWEALTH_TOTAL = 500000000; // ₦500 Million
+    const SUPABOL_TOTAL = 100000000;     // ₦100 Million
+
+    let primaryShare = 0;
+    let poolShareTotal = 0;
+    let poolType = null;
+
+    if (typeName === 'KOMONWEALTH') {
+      primaryShare = KOMONWEALTH_TOTAL * 0.10;      // ₦50,000,000
+      poolShareTotal = KOMONWEALTH_TOTAL * 0.90;    // ₦450,000,000
+      poolType = 'lga';
+    } else if (typeName === 'SUPABOL') {
+      primaryShare = SUPABOL_TOTAL * 0.20;          // ₦20,000,000
+      poolShareTotal = SUPABOL_TOTAL * 0.80;        // ₦80,000,000
+      poolType = 'school';
+    } else {
+      // Standard competition (falls back to DB value)
+      primaryShare = Number(competition.procurement_value) || 0; 
+    }
+
+    // Mark primary ticket as winner
+    await connection.query('UPDATE tickets SET is_winner = 1 WHERE id = ?', [primaryTicket.id]);
+    await connection.query(
+      `INSERT INTO winners (user_id, competition_id, ticket_id, status, winner_type, pool_share_amount, won_at, created_at)
+       VALUES (?, ?, ?, 'pending', 'primary', ?, NOW(), NOW())`,
+      [primaryTicket.user_id, competitionId, primaryTicket.id, primaryShare]
+    );
+
+    // 3. Insert Pool Winners (if applicable)
+    let poolWinnersCount = 0;
+    if (poolType) {
+      let poolQuery = `
+        SELECT DISTINCT t.user_id, t.id as ticket_id
+        FROM tickets t
+        JOIN users u ON t.user_id = u.Id
+        WHERE t.competition_id = ?
+          AND t.user_id != ? 
+      `;
+      const poolParams = [competitionId, primaryTicket.user_id];
+
+      if (poolType === 'lga' && primaryTicket.lga) {
+        poolQuery += ` AND u.lga = ?`;
+        poolParams.push(primaryTicket.lga);
+      } else if (poolType === 'school' && primaryTicket.schoolName) {
+        poolQuery += ` AND u.schoolName = ?`;
+        poolParams.push(primaryTicket.schoolName);
+      }
+
+      // Only get them if they don't already have a winning ticket
+      poolQuery += ` AND t.user_id NOT IN (SELECT user_id FROM winners WHERE competition_id = ?)`;
+      poolParams.push(competitionId);
+
+      const [poolParticipants] = await connection.query(poolQuery, poolParams);
+      poolWinnersCount = poolParticipants.length;
+
+      if (poolWinnersCount > 0) {
+        // Divide the pool total by the number of people in the LGA/School
+        const amountPerPerson = poolShareTotal / poolWinnersCount;
+
+        for (const p of poolParticipants) {
+          await connection.query('UPDATE tickets SET is_winner = 1 WHERE id = ?', [p.ticket_id]);
+          await connection.query(
+            `INSERT INTO winners (user_id, competition_id, ticket_id, status, winner_type, pool_share_amount, won_at, created_at)
+             VALUES (?, ?, ?, 'pending', 'pool', ?, NOW(), NOW())`,
+            [p.user_id, competitionId, p.ticket_id, amountPerPerson]
+          );
+        }
+      }
+    }
+
+    // 4. Update competition count
+    const newWinnersDrawn = winnersDrawn + 1;
+    await connection.query(
+      'UPDATE competitions SET winners_drawn = ? WHERE id = ?',
+      [newWinnersDrawn, competitionId]
+    );
+
+    if (newWinnersDrawn >= totalWinners) {
+      await connection.query("UPDATE competitions SET status = 'Closed' WHERE id = ?", [competitionId]);
+    }
+
+    await connection.commit();
+
+    // ============================================
+    // EMAILS (Non-blocking)
+    // ============================================
+    try {
+      // Fetch ALL winners (primary + pool) for this draw
+      const [allWinners] = await db.query(`
+        SELECT u.name, u.email, w.winner_type, w.pool_share_amount
+        FROM winners w
+        JOIN users u ON w.user_id = u.Id
+        WHERE w.competition_id = ? AND w.won_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE)
+      `, [competitionId]);
+
+      for (const w of allWinners) {
+        let prizeName = competition.title;
+        if (w.winner_type === 'primary') {
+           prizeName = `Primary Winner: ₦${Number(w.pool_share_amount).toLocaleString()}`;
+        } else {
+           prizeName = `Community/Student Pool Share: ₦${Number(w.pool_share_amount).toLocaleString()}`;
+        }
+
+        await sendDrawNotification(w.email, w.name, {
+          title: competition.title,
+          drawDate: new Date().toLocaleString(),
+          prizeName: prizeName,
+          winnerName: w.name,
+          isWinner: true, // Everyone gets a winner email
+          resultsUrl: 'https://www.keboka.com/winners',
+        });
+      }
+    } catch (emailErr) {
+      console.error('Email error:', emailErr.message);
+    }
+
+    return { success: true, primaryWinner: primaryTicket.ticket_number, poolWinners: poolWinnersCount };
+
+  } catch (err) {
+    await connection.rollback();
+    console.error('Draw error:', err);
+    return { success: false, reason: 'error', error: err.message };
+  } finally {
+    connection.release();
+  }
+};
+
+export const drawCompetitionWinnerByCornJob_old = async (competitionId) => {
   const connection = await db.getConnection();
 
   try {
