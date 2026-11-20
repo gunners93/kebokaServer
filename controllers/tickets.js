@@ -29,6 +29,7 @@ export const purchaseTickets = async (req, res) => {
     for (const item of tickets) {
       const { ticket_id, quantity, price, type } = item;
 
+      // 🔒 Lock competition row to prevent overselling
       const [rows] = await connection.query(
         `SELECT id, title, total_participants, tickets_sold
          FROM competitions WHERE id = ? FOR UPDATE`,
@@ -38,8 +39,15 @@ export const purchaseTickets = async (req, res) => {
       if (rows.length === 0) throw new Error(`Competition ${ticket_id} not found`);
       const competition = rows[0];
 
+      // ✅ CHECK IF SOLD OUT
+      if (competition.tickets_sold >= competition.total_participants) {
+        throw new Error(`Sorry, "${competition.title}" is completely SOLD OUT.`);
+      }
+
+      // ✅ PREVENT OVERSELLING
       if (competition.tickets_sold + quantity > competition.total_participants) {
-        throw new Error(`Not enough tickets remaining for competition: ${ticket_id}`);
+        const remaining = competition.total_participants - competition.tickets_sold;
+        throw new Error(`Only ${remaining} ticket(s) remaining for "${competition.title}".`);
       }
 
       const ticketRows = [];
@@ -49,21 +57,28 @@ export const purchaseTickets = async (req, res) => {
       for (let i = 1; i <= quantity; i++) {
         const nextNumber = currentSold + i;
         const ticketNumber = `KBK-${cleanType}-${String(nextNumber).padStart(6, "0")}`;
-        ticketRows.push([userId, ticket_id, ticketNumber, price, orderId]);
+        
+        // ✅ Push data for the tickets table
+        ticketRows.push([userId, ticket_id, ticketNumber, price, orderId, 'active']);
+        
+        // ✅ Track for the email
         allGeneratedTickets.push({
           ticket_id,
+          ticket_number: ticketNumber, // Added for email compatibility
           ticketNumber,
           competitionTitle: competition.title,
         });
       }
 
+      // ✅ FIXED: Insert into `tickets` table (not user_tickets) so MyCompetitions works
       await connection.query(
-        `INSERT INTO user_tickets
-         (user_id, competition_id, ticket_number, price, order_id)
+        `INSERT INTO tickets
+         (user_id, competition_id, ticket_number, price, order_id, status)
          VALUES ?`,
         [ticketRows]
       );
 
+      // Update competition sold count
       await connection.query(
         `UPDATE competitions SET tickets_sold = tickets_sold + ? WHERE id = ?`,
         [quantity, ticket_id]

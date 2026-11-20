@@ -253,7 +253,7 @@ export const userProfileUpdate = async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ success: false, message: "Server error" });
+    res.status(500).json({ success: false, message: err.message  });
   }
 };
 
