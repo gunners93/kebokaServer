@@ -885,6 +885,49 @@ export const updateOrderStatus = async (req, res) => {
   }
 };
 
+
+// Helper to generate the custom ticket format
+function generateCustomTicketNumber(competitionType, startDate, endDate) {
+  // 1. Map competition types to prefixes based on your database screenshot
+  const typeMap = {
+    'KeboCar': 'KBC',
+    'KeboLifestyle': 'LFS',
+    'KeboUltimate': 'ULT',
+    'BillonaireJackpot': 'JAP', // Assuming this is your Jackpot type_name
+    'KOMONWEALTH': 'KWT',
+    'KeboMix': 'INW',           // "Instant Win" in your screenshot is "KeboMix"
+    'Supabol': 'SPB',
+    'Kebocash': 'CSH',
+    'Cash': 'CSH'
+  };
+
+  // Fallback to first 3 letters uppercase if type isn't in the map
+  const prefix = typeMap[competitionType] || (competitionType ? competitionType.substring(0, 3).toUpperCase() : 'TKT');
+
+  // 2. Format Dates to YY-MM-DD (e.g., 25-10-26)
+  const formatDateStr = (dateStr) => {
+    if (!dateStr) return '000000';
+    const d = new Date(dateStr);
+    if (isNaN(d)) return '000000';
+    
+    const yy = String(d.getFullYear()).slice(-2);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yy}${mm}${dd}`; // Returns a continuous string like 251026
+  };
+
+  const startStr = formatDateStr(startDate);
+  const endStr = formatDateStr(endDate);
+
+  // 3. Generate 2-character alphanumeric suffix (e.g., A1, 9X)
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const randomSuffix = 
+    chars.charAt(Math.floor(Math.random() * 36)) + 
+    chars.charAt(Math.floor(Math.random() * 36));
+
+  // 4. Combine everything
+  return `${prefix}${startStr}${endStr}${randomSuffix}`;
+}
 export const adminCreateTickets = async (req, res) => {
   try {
     if (req.user.role !== "admin") {
@@ -927,18 +970,37 @@ export const adminCreateTickets = async (req, res) => {
     ]);
 
     const createdTickets = [];
-    for (const item of items) {
+  // Inside finalizePaidOrder
+
+  // 3. Create tickets
+ 
+  for (const item of items) {
       const quantity = parseInt(item.quantity) || 1;
+      
+      // ✅ Fetch competition details to get type_name and dates
+      const [compRows] = await db.query(
+        `SELECT ct.type_name, c.start_date, c.end_date 
+         FROM competitions c
+         LEFT JOIN competition_types ct ON c.type_id = ct.id
+         WHERE c.id = ?`,
+        [item.competition_id]
+      );
+      
+      const compData = compRows[0] || {};
+      const compType = compData.type_name || 'Ticket';
+      const startDate = compData.start_date;
+      const endDate = compData.end_date;
+
       for (let i = 0; i < quantity; i++) {
-        const ticketNumber = `TKT${Date.now()}${Math.random()
-          .toString(36)
-          .substring(2, 8)
-          .toUpperCase()}`;
+        // ✅ Use the custom generator
+        const ticketNumber = generateCustomTicketNumber(compType, startDate, endDate);
+        
         const [result] = await db.query(
           `INSERT INTO tickets (user_id, competition_id, order_id, ticket_number, status, created_at)
            VALUES (?, ?, ?, ?, 'active', NOW())`,
           [order[0].user_id, item.competition_id, order[0].id, ticketNumber]
         );
+        
         createdTickets.push({
           id: result.insertId,
           ticketNumber,
@@ -952,7 +1014,6 @@ export const adminCreateTickets = async (req, res) => {
         });
       }
     }
-
     // ✅ Send all 3 emails (order invoice + receipt + tickets list)
     try {
       const [u] = await db.query(

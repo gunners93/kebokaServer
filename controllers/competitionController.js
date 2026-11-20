@@ -1009,8 +1009,6 @@ export const drawCompetitionWinner = async (req, res) => {
 
 // controllers/competitionController.js
 
-// controllers/competitionController.js
-
 export const drawCompetitionWinnerByCornJob = async (competitionId) => {
   const connection = await db.getConnection();
 
@@ -1035,7 +1033,7 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
       return { success: false, reason: 'already_complete' };
     }
 
-    // Get eligible tickets
+    // Get eligible tickets for the primary winner
     const [availableTickets] = await connection.query(`
       SELECT t.id, t.ticket_number, t.user_id, u.lga, u.schoolName
       FROM tickets t
@@ -1059,9 +1057,9 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
     const [ctRows] = await connection.query('SELECT type_name FROM competition_types WHERE id = ?', [competition.type_id]);
     const typeName = ctRows[0]?.type_name?.toUpperCase();
 
-    // ✅ Hardcoded Fixed Amounts as requested
-    const KOMONWEALTH_TOTAL = 500000000; // ₦500 Million
-    const SUPABOL_TOTAL = 100000000;     // ₦100 Million
+    // Hardcoded Fixed Amounts as requested
+    const KOMONWEALTH_TOTAL = 500000000; 
+    const SUPABOL_TOTAL = 100000000;     
 
     let primaryShare = 0;
     let poolShareTotal = 0;
@@ -1076,7 +1074,6 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
       poolShareTotal = SUPABOL_TOTAL * 0.80;        // ₦80,000,000
       poolType = 'school';
     } else {
-      // Standard competition (falls back to DB value)
       primaryShare = Number(competition.procurement_value) || 0; 
     }
 
@@ -1091,8 +1088,9 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
     // 3. Insert Pool Winners (if applicable)
     let poolWinnersCount = 0;
     if (poolType) {
+      // ✅ UPDATED: Only select users who have bought 10 or more tickets in THIS competition
       let poolQuery = `
-        SELECT DISTINCT t.user_id, t.id as ticket_id
+        SELECT t.user_id, MAX(t.id) as ticket_id, COUNT(t.id) as total_tickets
         FROM tickets t
         JOIN users u ON t.user_id = u.Id
         WHERE t.competition_id = ?
@@ -1108,15 +1106,17 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
         poolParams.push(primaryTicket.schoolName);
       }
 
-      // Only get them if they don't already have a winning ticket
+      // Exclude users who already won
       poolQuery += ` AND t.user_id NOT IN (SELECT user_id FROM winners WHERE competition_id = ?)`;
       poolParams.push(competitionId);
 
+      // ✅ Group by user and filter HAVING COUNT >= 10
+      poolQuery += ` GROUP BY t.user_id HAVING total_tickets >= 10`;
+      
       const [poolParticipants] = await connection.query(poolQuery, poolParams);
       poolWinnersCount = poolParticipants.length;
 
       if (poolWinnersCount > 0) {
-        // Divide the pool total by the number of people in the LGA/School
         const amountPerPerson = poolShareTotal / poolWinnersCount;
 
         for (const p of poolParticipants) {
@@ -1147,7 +1147,6 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
     // EMAILS (Non-blocking)
     // ============================================
     try {
-      // Fetch ALL winners (primary + pool) for this draw
       const [allWinners] = await db.query(`
         SELECT u.name, u.email, w.winner_type, w.pool_share_amount
         FROM winners w
@@ -1168,7 +1167,7 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
           drawDate: new Date().toLocaleString(),
           prizeName: prizeName,
           winnerName: w.name,
-          isWinner: true, // Everyone gets a winner email
+          isWinner: true,
           resultsUrl: 'https://www.keboka.com/winners',
         });
       }
@@ -1185,7 +1184,7 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
   } finally {
     connection.release();
   }
-};
+};;
 
 export const drawCompetitionWinnerByCornJob_old = async (competitionId) => {
   const connection = await db.getConnection();
