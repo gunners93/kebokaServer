@@ -35,13 +35,13 @@ const getCompetitionsReadyToDraw = async () => {
         c.end_date <= DATE_SUB(NOW(), INTERVAL ? MINUTE)
         -- not fully closed yet
         AND c.status NOT IN ('Closed', 'closed')
-        -- still has winners left to draw
-        AND COALESCE(c.winners_drawn, 0) < COALESCE(c.total_winners, 1)
+        -- ✅ STRICT CHECK: Only draw if winners_drawn is LESS than total_winners
+        AND c.winners_drawn < c.total_winners
         
-        -- ✅ NEW FIX: Ensure we haven't already drawn a primary winner
+        -- ✅ BULLETPROOF CHECK: Case-insensitive check for primary winner
         AND NOT EXISTS (
           SELECT 1 FROM winners w 
-          WHERE w.competition_id = c.id AND w.winner_type = 'primary'
+          WHERE w.competition_id = c.id AND LOWER(w.winner_type) = 'primary'
         )
 
         -- has at least one ticket
