@@ -1009,6 +1009,8 @@ export const drawCompetitionWinner = async (req, res) => {
 
 // controllers/competitionController.js
 
+// controllers/competitionController.js
+
 export const drawCompetitionWinnerByCornJob = async (competitionId) => {
   const connection = await db.getConnection();
 
@@ -1026,9 +1028,15 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
 
     const competition = comp[0];
     const totalWinners = competition.total_winners || 1;
-    const winnersDrawn = competition.winners_drawn || 0;
+    
+    // ✅ FIX: Only count PRIMARY winners to determine if we are done
+    const [primaryWinnerRows] = await connection.query(
+      "SELECT COUNT(*) as count FROM winners WHERE competition_id = ? AND winner_type = 'primary'",
+      [competitionId]
+    );
+    const primaryWinnersDrawn = primaryWinnerRows[0].count;
 
-    if (winnersDrawn >= totalWinners) {
+    if (primaryWinnersDrawn >= totalWinners) {
       await connection.rollback();
       return { success: false, reason: 'already_complete' };
     }
@@ -1057,7 +1065,6 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
     const [ctRows] = await connection.query('SELECT type_name FROM competition_types WHERE id = ?', [competition.type_id]);
     const typeName = ctRows[0]?.type_name?.toUpperCase();
 
-    // Hardcoded Fixed Amounts as requested
     const KOMONWEALTH_TOTAL = 500000000; 
     const SUPABOL_TOTAL = 100000000;     
 
@@ -1088,7 +1095,6 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
     // 3. Insert Pool Winners (if applicable)
     let poolWinnersCount = 0;
     if (poolType) {
-      // ✅ UPDATED: Only select users who have bought 10 or more tickets in THIS competition
       let poolQuery = `
         SELECT t.user_id, MAX(t.id) as ticket_id, COUNT(t.id) as total_tickets
         FROM tickets t
@@ -1106,11 +1112,8 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
         poolParams.push(primaryTicket.schoolName);
       }
 
-      // Exclude users who already won
       poolQuery += ` AND t.user_id NOT IN (SELECT user_id FROM winners WHERE competition_id = ?)`;
       poolParams.push(competitionId);
-
-      // ✅ Group by user and filter HAVING COUNT >= 10
       poolQuery += ` GROUP BY t.user_id HAVING total_tickets >= 10`;
       
       const [poolParticipants] = await connection.query(poolQuery, poolParams);
@@ -1131,13 +1134,14 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
     }
 
     // 4. Update competition count
-    const newWinnersDrawn = winnersDrawn + 1;
+    // ✅ FIX: Base this strictly on how many primary winners we have now
+    const newPrimaryDrawn = primaryWinnersDrawn + 1;
     await connection.query(
       'UPDATE competitions SET winners_drawn = ? WHERE id = ?',
-      [newWinnersDrawn, competitionId]
+      [newPrimaryDrawn, competitionId]
     );
 
-    if (newWinnersDrawn >= totalWinners) {
+    if (newPrimaryDrawn >= totalWinners) {
       await connection.query("UPDATE competitions SET status = 'Closed' WHERE id = ?", [competitionId]);
     }
 
@@ -1184,7 +1188,7 @@ export const drawCompetitionWinnerByCornJob = async (competitionId) => {
   } finally {
     connection.release();
   }
-};;
+};
 
 export const drawCompetitionWinnerByCornJob_old = async (competitionId) => {
   const connection = await db.getConnection();

@@ -37,6 +37,13 @@ const getCompetitionsReadyToDraw = async () => {
         AND c.status NOT IN ('Closed', 'closed')
         -- still has winners left to draw
         AND COALESCE(c.winners_drawn, 0) < COALESCE(c.total_winners, 1)
+        
+        -- ✅ NEW FIX: Ensure we haven't already drawn a primary winner
+        AND NOT EXISTS (
+          SELECT 1 FROM winners w 
+          WHERE w.competition_id = c.id AND w.winner_type = 'primary'
+        )
+
         -- has at least one ticket
         AND EXISTS (
           SELECT 1 FROM tickets t 
