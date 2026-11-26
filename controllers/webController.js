@@ -1176,15 +1176,15 @@ export const getWinnerDetails = async (req, res) => {
 
     const competition = compRows[0];
 
-    // ============================================
-    // 2. All winners — ✅ joined with states + lgas
-    // ============================================
+    // 2. All winners
     const [winnerRows] = await db.query(
       `SELECT 
         w.id AS winner_id,
         w.user_id,
         w.competition_id,
         w.ticket_id,
+        w.winner_type,           
+        w.pool_share_amount,    
         w.prize_amount,
         w.status AS winner_status,
         w.won_at,
@@ -1211,9 +1211,7 @@ export const getWinnerDetails = async (req, res) => {
       [competitionId]
     );
 
-    // ============================================
-    // 3. All participants — ✅ joined with states + lgas
-    // ============================================
+    // 3. All participants
     const [participants] = await db.query(
       `SELECT 
         u.Id AS user_id,
@@ -1258,80 +1256,42 @@ export const getWinnerDetails = async (req, res) => {
     const prizeImages = safeParse(competition.procurement_images, []);
     const competitionImages = safeParse(competition.images, []);
 
+    // ============================================
     // 6. Compute split-specific data based on type
+    // ✅ FIX: Read directly from the winners table
+    // ============================================
     const typeName = (competition.competition_type || "").toUpperCase();
     const prizeValue = Number(competition.procurement_value) || 0;
 
     let splitInfo = null;
 
-    if (typeName === "SUPABOL" && winnerRows.length > 0) {
-      // Supabol: winner gets 20%, participants in same school share 80%
-      const winner = winnerRows[0];
-      const sameSchoolParticipants = participants.filter(
-        (p) =>
-          p.schoolName &&
-          winner.schoolName &&
-          p.schoolName.toLowerCase() === winner.schoolName.toLowerCase() &&
-          p.user_id !== winner.user_id
-      );
+    if ((typeName === "SUPABOL" || typeName === "KOMONWEALTH") && winnerRows.length > 0) {
+      const primaryWinner = winnerRows.find(w => w.winner_type?.toLowerCase() === 'primary') || winnerRows[0];
+      const poolWinners = winnerRows.filter(w => w.winner_type?.toLowerCase() === 'pool');
 
-      const winnerShare = prizeValue * 0.2;
-      const sharedPool = prizeValue * 0.8;
-      const perParticipant =
-        sameSchoolParticipants.length > 0
-          ? sharedPool / sameSchoolParticipants.length
-          : 0;
+      // Use exact amounts saved in DB
+      const winnerShare = Number(primaryWinner.pool_share_amount || (prizeValue * (typeName === 'SUPABOL' ? 0.2 : 0.1)));
+      const perParticipant = poolWinners.length > 0 ? Number(poolWinners[0].pool_share_amount) : 0;
+      const sharedPool = perParticipant * poolWinners.length;
+
+      const isSupabol = typeName === "SUPABOL";
 
       splitInfo = {
-        type: "supabol",
+        type: isSupabol ? "supabol" : "komonwealth",
         winnerShare,
-        sharedPool,
-        totalParticipants: sameSchoolParticipants.length,
+        sharedPool: sharedPool || (prizeValue * (isSupabol ? 0.8 : 0.9)), // fallback if no pool winners
+        totalParticipants: poolWinners.length,
         perParticipant,
-        schoolName: winner.schoolName,
-        participants: sameSchoolParticipants.map((p) => ({
+        schoolName: primaryWinner.schoolName,
+        lga: primaryWinner.lga_name || primaryWinner.lga_id,
+        state: primaryWinner.state_name || primaryWinner.state_id,
+        participants: poolWinners.map((p) => ({
           name: p.name,
           ticket_number: p.ticket_number,
           schoolName: p.schoolName,
-        })),
-      };
-    }
-
-    if (typeName === "KOMONWEALTH" && winnerRows.length > 0) {
-      // Komon Wealth: winner gets 10%, LGA participants share 90%
-      const winner = winnerRows[0];
-      const sameLgaParticipants = participants.filter(
-        (p) =>
-          p.lga_id &&
-          winner.lga_id &&
-          Number(p.lga_id) === Number(winner.lga_id) &&
-          p.user_id !== winner.user_id
-      );
-
-      const winnerShare = prizeValue * 0.1;
-      const sharedPool = prizeValue * 0.9;
-      const perParticipant =
-        sameLgaParticipants.length > 0
-          ? sharedPool / sameLgaParticipants.length
-          : 0;
-
-      splitInfo = {
-        type: "komonwealth",
-        winnerShare,
-        sharedPool,
-        totalParticipants: sameLgaParticipants.length,
-        perParticipant,
-        lga: winner.lga_name || winner.lga_id,
-        state: winner.state_name || winner.state_id,
-        lga_name: winner.lga_name,
-        state_name: winner.state_name,
-        participants: sameLgaParticipants.map((p) => ({
-          name: p.name,
-          ticket_number: p.ticket_number,
           lga: p.lga_name || p.lga_id,
           state: p.state_name || p.state_id,
-          lga_name: p.lga_name,
-          state_name: p.state_name,
+          prize_amount: Number(p.pool_share_amount) // ✅ Pass the individual amount
         })),
       };
     }
@@ -1342,7 +1302,6 @@ export const getWinnerDetails = async (req, res) => {
       is_winner: true,
       location:
         [w.lga_name, w.state_name].filter(Boolean).join(", ") || null,
-      // Backward-compat fields (in case frontend still reads these)
       state: w.state_name || w.state_id,
       lga: w.lga_name || w.lga_id,
     }));
