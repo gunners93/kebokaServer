@@ -358,7 +358,7 @@ export const getPublicWinners = async (req, res) => {
         lga: w.user_lga,
         lga_name:w.lga_name,
         state_name:w.state_name,
-        
+        winner_type:w.winner_type,
         photo: w.user_photo,
         ticket_number: w.ticket_number,
         won_at: w.won_at,
