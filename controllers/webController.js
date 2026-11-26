@@ -310,6 +310,7 @@ export const getPublicWinners = async (req, res) => {
         w.prize_amount,
         w.status,
         w.won_at,
+        w.winner_type,
         w.created_at,
         u.name AS user_name,
         u.email AS user_email,
